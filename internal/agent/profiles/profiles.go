@@ -9,9 +9,9 @@
 package profiles
 
 import (
-	"slices"
-
 	"github.com/johnny1110/evva/internal/agent"
+	"github.com/johnny1110/evva/internal/constant"
+	"github.com/johnny1110/evva/internal/llm"
 	"github.com/johnny1110/evva/internal/tools"
 )
 
@@ -28,17 +28,17 @@ described in the user prompt and return a short summary. Stay in scope.`
 
 // Main returns the full-kit profile: every active tool plus every deferred
 // tool. Pass extras to append additional tool names beyond the default kit.
-func Main(extras ...tools.ToolName) agent.Profile {
+func Main(provider constant.LLMProvider, model constant.Model, options []llm.Option) agent.Profile {
 	return agent.Profile{
 		Type:         agent.MAIN,
 		SystemPrompt: mainSystemPrompt,
-		Tools:        slices.Concat(tools.All(), extras),
+		Tools:        tools.All(),
 	}
 }
 
 // Explore returns a read-only profile: just READ_FILE. Useful for sub-agents
 // whose job is to inspect the codebase without risk of modification.
-func Explore() agent.Profile {
+func Explore(provider constant.LLMProvider, model constant.Model, options []llm.Option) agent.Profile {
 	return agent.Profile{
 		Type:         agent.EXPLORE,
 		SystemPrompt: exploreSystemPrompt,

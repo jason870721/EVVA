@@ -6,13 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/johnny1110/evva/internal/constant"
 	"io"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	config "github.com/johnny1110/evva/configs"
 	"github.com/johnny1110/evva/internal/agent"
 	"github.com/johnny1110/evva/internal/agent/profiles"
 	"github.com/johnny1110/evva/internal/llm"
@@ -31,10 +31,6 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	provider := flag.String("provider", "deepseek", "LLM provider: claude | deepseek | ollama")
-	model := flag.String("model", "", "model id (empty → provider default)")
-	profile := flag.String("profile", "main", "agent profile: main | explore | general")
-	system := flag.String("system", "", "override the profile's system prompt")
 	temp := flag.Float64("temp", -1, "sampling temperature (-1 → leave unset)")
 	maxTokens := flag.Int("max-tokens", 1024, "max output tokens (0 → provider default)")
 	flag.Parse()
@@ -47,25 +43,14 @@ func main() {
 		exitf(2, "usage: evva [-provider X] [-model Y] [-system ...] [-temp 0.7] <prompt>")
 	}
 
-	cfg := config.Get()
-	client, err := buildClient(cfg, *provider, *model, buildOptions(*temp, *maxTokens)...)
-	if err != nil {
-		exitf(1, "evva: %v", err)
-	}
-
-	prof, err := pickProfile(*profile)
-	if err != nil {
-		exitf(2, "evva: %v", err)
-	}
-	if *system != "" {
-		prof.SystemPrompt = *system
-	}
+	prof := profiles.Main(constant.DEEPSEEK, constant.DEEPSEEK_V4_FLASH, buildOptions(*temp, *maxTokens))
+	prof.SystemPrompt = "You are a helpful agent."
 
 	// Ctrl+C / SIGTERM cancels ctx, which the client converts to llm.ErrInterrupted.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ag, err := agent.New(client, prof)
+	ag, err := agent.New(prof)
 	if err != nil {
 		exitf(1, "evva: %v", err)
 	}
@@ -116,19 +101,6 @@ func buildOptions(temp float64, maxTokens int) []llm.Option {
 		out = append(out, llm.WithMaxTokens(maxTokens))
 	}
 	return out
-}
-
-func pickProfile(name string) (agent.Profile, error) {
-	switch strings.ToLower(name) {
-	case "main":
-		return profiles.Main(), nil
-	case "explore":
-		return profiles.Explore(), nil
-	case "general":
-		return profiles.General(), nil
-	default:
-		return agent.Profile{}, fmt.Errorf("unknown profile %q (want main | explore | general)", name)
-	}
 }
 
 func exitf(code int, format string, args ...any) {
