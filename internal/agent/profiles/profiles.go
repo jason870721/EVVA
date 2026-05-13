@@ -13,6 +13,7 @@ import (
 	"github.com/johnny1110/evva/internal/constant"
 	"github.com/johnny1110/evva/internal/llm"
 	"github.com/johnny1110/evva/internal/tools"
+	"github.com/johnny1110/evva/internal/toolset"
 )
 
 const mainSystemPrompt = `You are evva, a helpful coding assistant operating
@@ -32,7 +33,7 @@ func Main(provider constant.LLMProvider, model constant.Model, options []llm.Opt
 	return agent.Profile{
 		Type:         agent.MAIN,
 		SystemPrompt: mainSystemPrompt,
-		Tools:        tools.All(),
+		Tools:        toolset.All(),
 	}
 }
 
@@ -42,7 +43,7 @@ func Explore(provider constant.LLMProvider, model constant.Model, options []llm.
 	return agent.Profile{
 		Type:         agent.EXPLORE,
 		SystemPrompt: exploreSystemPrompt,
-		Tools:        tools.ReadOnly(),
+		Tools:        toolset.ReadOnly(),
 	}
 }
 

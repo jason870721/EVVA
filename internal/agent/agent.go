@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/johnny1110/evva/internal/llm"
+	"github.com/johnny1110/evva/internal/llmfactory"
 	"github.com/johnny1110/evva/internal/logger"
 	"github.com/johnny1110/evva/internal/session"
 	"github.com/johnny1110/evva/internal/tools"
@@ -61,7 +62,7 @@ func New(profile Profile) (*Agent, error) {
 	}
 
 	// init llm
-	llmClient, err := llm.Of(
+	llmClient, err := llmfactory.Of(
 		profile.LLMProvider,
 		profile.LLMModel,
 		profile.LLMOptions,
