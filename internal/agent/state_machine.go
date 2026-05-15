@@ -178,6 +178,15 @@ func (a *Agent) text(usage llm.Usage, thinking string, content string) {
 			Cumulative: a.session.Usage,
 		}
 	})
+
+	// Streaming mode already painted thinking + text into the transcript
+	// as deltas via KindTextChunk / KindThinkingChunk. Re-emitting the
+	// whole blocks here would duplicate the rendered output, so we stop
+	// at usage and let the chunk events stand as the user-facing record.
+	if a.profile.Stream {
+		return
+	}
+
 	if cfg.DisplayThinking && thinking != "" {
 		a.emit(event.KindThinking, func(e *event.Event) {
 			e.Thinking = &event.TextPayload{Text: thinking}

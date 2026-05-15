@@ -38,8 +38,16 @@ const (
 	KindTurnEnd   Kind = "turn_end"
 
 	KindDrainingInfo      = "draining_info" // agent is draining info from subagent or bg bash
-	KindThinking     Kind = "thinking"      // assistant reasoning text
-	KindText         Kind = "text"          // assistant final text
+	KindThinking     Kind = "thinking"      // assistant reasoning text (whole block; buffered providers)
+	KindText         Kind = "text"          // assistant final text (whole block; buffered providers)
+
+	// KindTextChunk and KindThinkingChunk are emitted by the streaming
+	// path. Each carries an incremental delta in TextPayload.Text; the
+	// UI accumulates consecutive chunks of the same kind into one logical
+	// block. Reset on KindTurnEnd. Streaming agents emit chunks only —
+	// the final KindText / KindThinking is skipped to avoid duplication.
+	KindTextChunk     Kind = "text_chunk"
+	KindThinkingChunk Kind = "thinking_chunk"
 
 	KindToolUseStart  Kind = "tool_use_start"
 	KindToolUseResult Kind = "tool_use_result"

@@ -153,15 +153,36 @@ func (a *Agent) done(iter int, resp llm.Response) string {
 	return resp.Content
 }
 
-// llmCall wraps llm.Complete with logging + event emission for failure modes.
+// llmCall wraps llm.Complete (or Stream when the profile opts in) with
+// logging + event emission for failure modes.
+//
+// When streaming is enabled the call drives a chunkAdapter that fans each
+// text/thinking delta back through the event sink as KindTextChunk /
+// KindThinkingChunk. Subagents skip the adapter — they don't emit
+// user-facing text events at all (see state_machine.go:text). The final
+// Response is identical in shape either way, so the downstream loop is
+// unchanged.
 func (a *Agent) llmCall(ctx context.Context) (llm.Response, error) {
 	a.logger.Debug("llm.call",
 		"profile", a.profile.Type.String(),
 		"messages", len(a.session.Messages),
 		"tools", len(a.exposeTools),
+		"stream", a.profile.Stream,
 	)
 
-	resp, err := a.llm.Complete(ctx, a.session.Messages, a.exposeTools)
+	var (
+		resp llm.Response
+		err  error
+	)
+	if a.profile.Stream {
+		var sink = llm.DiscardChunks
+		if !a.IsSubagent() {
+			sink = a.newChunkAdapter()
+		}
+		resp, err = a.llm.Stream(ctx, a.session.Messages, a.exposeTools, sink)
+	} else {
+		resp, err = a.llm.Complete(ctx, a.session.Messages, a.exposeTools)
+	}
 	if err != nil {
 		return llm.Response{}, err
 	}

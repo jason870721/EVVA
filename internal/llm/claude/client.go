@@ -136,6 +136,7 @@ type apiRequest struct {
 	StopSequences []string     `json:"stop_sequences,omitempty"`
 	Tools         []apiTool    `json:"tools,omitempty"`
 	Thinking      *apiThinking `json:"thinking,omitempty"`
+	Stream        bool         `json:"stream,omitempty"`
 }
 
 type apiResponse struct {
@@ -155,11 +156,11 @@ type apiResponse struct {
 
 // --- Client interface -----------------------------------------------------
 
-func (c *Client) Complete(ctx context.Context, messages []llm.Message, toolSet []tools.Tool) (llm.Response, error) {
-	if c.apiKey == "" {
-		return llm.Response{}, fmt.Errorf("claude: missing API key")
-	}
-
+// buildRequestBody assembles the shared apiRequest used by both Complete and
+// Stream. Stream callers set Stream=true on the returned body before
+// marshaling. Extended-thinking knobs are applied here so the two paths
+// agree byte-for-byte on what gets sent to Anthropic.
+func (c *Client) buildRequestBody(messages []llm.Message, toolSet []tools.Tool) apiRequest {
 	body := apiRequest{
 		Model:         c.model,
 		Messages:      toAPIMessages(messages),
@@ -187,6 +188,15 @@ func (c *Client) Complete(ctx context.Context, messages []llm.Message, toolSet [
 		body.TopP = nil
 		body.TopK = nil
 	}
+	return body
+}
+
+func (c *Client) Complete(ctx context.Context, messages []llm.Message, toolSet []tools.Tool) (llm.Response, error) {
+	if c.apiKey == "" {
+		return llm.Response{}, fmt.Errorf("claude: missing API key")
+	}
+
+	body := c.buildRequestBody(messages, toolSet)
 
 	payload, err := json.Marshal(body)
 	if err != nil {

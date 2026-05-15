@@ -81,6 +81,12 @@ type Profile struct {
 	LLMProvider constant.LLMProvider
 	LLMModel    constant.Model
 	LLMOptions  []llm.Option
+
+	// Stream selects the streaming completion path. When true the agent
+	// calls llm.Client.Stream and forwards each delta to the event sink
+	// as KindTextChunk / KindThinkingChunk; when false it calls Complete
+	// and emits a single KindText / KindThinking after the turn assembles.
+	Stream bool
 }
 
 const mainSystemPrompt = `You are evva, a helpful coding assistant operating
@@ -96,6 +102,11 @@ described in the user prompt and return a short done. Stay in scope.`
 
 // Main returns the full-kit profile: fs/shell/meta are active; the rest are
 // deferred (loaded on demand via TOOL_SEARCH).
+//
+// Streaming is on by default — the user-facing UX win is large and the
+// chunk adapter falls back cleanly for providers without native streaming.
+// Callers who want the old buffered behavior can pass WithStream(false) at
+// agent construction.
 func Main(provider constant.LLMProvider, model constant.Model, options []llm.Option) Profile {
 	return Profile{
 		Type:         MAIN,
@@ -113,6 +124,7 @@ func Main(provider constant.LLMProvider, model constant.Model, options []llm.Opt
 		LLMProvider: provider,
 		LLMModel:    model,
 		LLMOptions:  options,
+		Stream:      true,
 	}
 }
 

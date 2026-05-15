@@ -30,6 +30,15 @@ func WithAsync(async bool) Option {
 	}
 }
 
+// WithStream toggles streaming completions for this agent. Overrides the
+// Profile's Stream field; useful for tests and one-off callers that want to
+// force the buffered or chunked path without editing the profile.
+func WithStream(stream bool) Option {
+	return func(a *Agent) {
+		a.profile.Stream = stream
+	}
+}
+
 // WithMaxIterations overrides DefaultMaxIterations. Pass 0 to use the
 // default. Negative values are clamped to 1 (single-turn).
 func WithMaxIterations(n int) Option {

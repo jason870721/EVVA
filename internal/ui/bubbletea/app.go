@@ -136,9 +136,10 @@ func newRootModel() *rootModel {
 	vp.YPosition = 0
 
 	return &rootModel{
-		input:    ta,
-		viewport: vp,
-		state:    stateIdle,
+		input:      ta,
+		viewport:   vp,
+		state:      stateIdle,
+		transcript: transcript{textInflightIdx: -1, thinkingInflightIdx: -1},
 	}
 }
 

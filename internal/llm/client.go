@@ -16,6 +16,15 @@ type Client interface {
 	Name() string
 	Model() string
 	Complete(ctx context.Context, messages []Message, tools []tools.Tool) (Response, error)
+	// Stream is the chunk-by-chunk variant of Complete. Implementations push
+	// each text/thinking delta through sink as it arrives, then return the
+	// fully assembled Response (content, thinking, signature, tool calls,
+	// usage). Cancellation rules are identical to Complete.
+	//
+	// A provider that has no native streaming endpoint MAY fall back to a
+	// buffered Complete and emit a single Chunk per kind at the end — this
+	// keeps the contract uniform at the cost of no progressive output.
+	Stream(ctx context.Context, messages []Message, tools []tools.Tool, sink ChunkSink) (Response, error)
 	// Apply tunes request parameters at runtime. Same options accepted by
 	// NewXxx — see WithSystem, WithTemperature, etc.
 	Apply(opts ...Option)
