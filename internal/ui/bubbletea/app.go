@@ -176,7 +176,7 @@ type rootModel struct {
 
 func newRootModel(evvaHome string) *rootModel {
 	ta := textarea.New()
-	ta.Placeholder = "Enter to send · Shift+Enter / Alt+Enter / Ctrl+J for newline"
+	ta.Placeholder = "<Enter> to send · <Ctrl> + <J> for newline"
 	ta.CharLimit = 0
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
