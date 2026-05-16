@@ -181,7 +181,7 @@ func (a *Agent) AgentID() string {
 
 func (a *Agent) ParentID() string {
 	if a.Parent != nil {
-		return a.ID
+		return a.Parent.ID
 	}
 	return ""
 }

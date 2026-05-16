@@ -15,10 +15,14 @@ import (
 )
 
 const (
-	tavilyEndpoint    = "https://api.tavily.com/search"
 	tavilyMaxResults  = 5
 	tavilyHTTPTimeout = 20 * time.Second
 )
+
+// tavilyEndpoint is the search-API URL. Promoted to a var (not a const)
+// so tests can point Execute at an httptest.Server and assert request
+// shape. Production callers never mutate it.
+var tavilyEndpoint = "https://api.tavily.com/search"
 
 // searchHTTPClient is shared by every Execute call — http.Client is safe
 // for concurrent use and pooling connections matters when the model fires
