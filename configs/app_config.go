@@ -48,6 +48,10 @@ type AppConfig struct {
 
 	// UI
 	DisplayThinking bool
+
+	// Web tools
+	TavilyAPIKey  string // empty → web_search reports "not configured"
+	FetchMaxBytes int    // cap on extracted text returned by web_fetch
 }
 
 var (

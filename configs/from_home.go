@@ -12,6 +12,11 @@ func setupGlobalParam(cfg *AppConfig) {
 	_ = os.MkdirAll(cfg.EvvaHomeSkillsDir, 0o755)
 
 	cfg.DisplayThinking = getEnvDefaultBool("DISPLAY_THINKING", "true")
+
+	if key := getEnvNullable("TAVILY_API_KEY"); key != nil {
+		cfg.TavilyAPIKey = *key
+	}
+	cfg.FetchMaxBytes = getEnvDefaultInt("FETCH_MAX_BYTES", "100000")
 }
 
 func setupLLMProviderConfig(cfg *AppConfig) {
