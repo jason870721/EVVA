@@ -232,7 +232,7 @@ func (a *Agent) SwitchLLM(provider constant.LLMProvider, model constant.Model) e
 
 func (a *Agent) ParentID() string {
 	if a.Parent != nil {
-		return a.ID
+		return a.Parent.ID
 	}
 	return ""
 }

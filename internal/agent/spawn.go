@@ -69,10 +69,22 @@ func (a *Agent) Spawn(ctx context.Context, req meta.SpawnRequest) (string, error
 		go func() {
 			resp, runErr := child.Run(ctx, req.Prompt)
 			if runErr != nil {
+				// Mark the panel entry so DrainCompleted can deliver
+				// the failure back to the parent's next turn. iter-limit
+				// is a distinct phase from a real crash — surface both.
+				if errors.Is(runErr, ErrIterLimit) {
+					group.Crush(child.ID, "[subagent paused at iteration limit]", runErr)
+				} else {
+					group.Crush(child.ID, "[subagent crushed]", runErr)
+				}
 				a.logger.Error("subagent crashed", "name", child.Name, "err", runErr)
 				return
 			}
 			a.logger.Debug("subagent done", "name", child.Name, "resp", truncateSummary(resp, 100))
+			// Report the result so the parent's loop drains it on its
+			// next iteration. Do NOT Remove here — async results live
+			// in the panel until DrainCompleted picks them up.
+			group.Report(child.ID, resp)
 		}()
 		return fmt.Sprintf("subagent %s(%s) spawned in background; its done will be delivered on a later turn (do not assume any result here).", child.Name, child.ID), nil
 	}

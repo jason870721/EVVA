@@ -385,6 +385,98 @@ func TestFullCompactResetsLastTurnInputTokens(t *testing.T) {
 	}
 }
 
+// TestMicroCompactEmptySession is a no-op smoke test — verifies micro
+// compact on a session with zero RoleTool messages doesn't panic, leaves
+// Messages untouched, but still flips IsMicroCompacted so the next
+// compact escalates.
+func TestMicroCompactEmptySession(t *testing.T) {
+	a := newTestAgent(nil)
+	// Pre-populate with non-tool messages only — micro should leave them.
+	a.session.Append(llm.Message{Role: llm.RoleUser, Content: "hi"})
+	a.session.Append(llm.Message{Role: llm.RoleAssistant, Content: "ok"})
+
+	before := a.session.GetMessages()
+
+	a.microCompact(a.session)
+
+	after := a.session.GetMessages()
+	if len(before) != len(after) {
+		t.Fatalf("micro-compact mutated message count on a no-tool session: before=%d after=%d", len(before), len(after))
+	}
+	for i := range before {
+		if before[i].Content != after[i].Content {
+			t.Errorf("message %d content drifted: before=%q after=%q", i, before[i].Content, after[i].Content)
+		}
+	}
+	if !a.session.IsMicroCompacted() {
+		t.Error("expected IsMicroCompacted true even on a no-op session — escalation must still happen next time")
+	}
+}
+
+// TestMicroCompactPreservesToolID locks down that ToolResult.ID survives
+// elision. The model uses the ID to match tool_use ↔ tool_result blocks;
+// losing it produces an invalid request that providers 400 on.
+func TestMicroCompactPreservesToolID(t *testing.T) {
+	a := newTestAgent(nil)
+	for i := 0; i < microCompactKeepRecent+3; i++ {
+		a.session.Append(llm.Message{
+			Role: llm.RoleTool,
+			ToolResults: []*llm.ToolResult{
+				{ID: idForTurn(i), Content: contentForTurn(i)},
+			},
+		})
+	}
+
+	a.microCompact(a.session)
+
+	for i, m := range a.session.GetMessages() {
+		if m.Role != llm.RoleTool {
+			continue
+		}
+		for j, tr := range m.ToolResults {
+			wantID := idForTurn(i)
+			if tr.ID != wantID {
+				t.Errorf("msg %d result %d: ID drifted, got %q want %q (must survive elision)",
+					i, j, tr.ID, wantID)
+			}
+		}
+	}
+}
+
+// TestMicroCompactIsStableUnderRepeatedCalls verifies calling
+// microCompact twice in a row doesn't double-elide or otherwise corrupt
+// already-placeholder results.
+func TestMicroCompactIsStableUnderRepeatedCalls(t *testing.T) {
+	a := newTestAgent(nil)
+	for i := 0; i < microCompactKeepRecent+2; i++ {
+		a.session.Append(llm.Message{
+			Role: llm.RoleTool,
+			ToolResults: []*llm.ToolResult{
+				{ID: idForTurn(i), Content: contentForTurn(i)},
+			},
+		})
+	}
+
+	a.microCompact(a.session)
+	firstPass := a.session.GetMessages()
+	a.microCompact(a.session)
+	secondPass := a.session.GetMessages()
+
+	if len(firstPass) != len(secondPass) {
+		t.Fatalf("message count drifted: first=%d second=%d", len(firstPass), len(secondPass))
+	}
+	for i := range firstPass {
+		if len(firstPass[i].ToolResults) != len(secondPass[i].ToolResults) {
+			t.Fatalf("msg %d tool result count drifted", i)
+		}
+		for j := range firstPass[i].ToolResults {
+			if firstPass[i].ToolResults[j].Content != secondPass[i].ToolResults[j].Content {
+				t.Errorf("msg %d result %d content drifted across repeat micro-compact", i, j)
+			}
+		}
+	}
+}
+
 // knownModelStub wraps stubLLM and reports a real Anthropic model name
 // so MODEL_CONTEXT_SIZE returns a non-zero budget. Without this the
 // ratio test would hit the unknown-model guard and silently no-op.
