@@ -9,6 +9,7 @@ import (
 	"github.com/muesli/reflow/wrap"
 
 	"github.com/johnny1110/evva/internal/agent/event"
+	"github.com/johnny1110/evva/internal/tools"
 	"github.com/johnny1110/evva/internal/tools/fs"
 )
 
@@ -56,6 +57,10 @@ type transcriptBlock struct {
 	// load-bearing artifact of the call; folding it defeats the
 	// purpose of the call having happened).
 	noFold bool
+	// hideResult suppresses the result body entirely in favor of a
+	// terse one-line summary. Set on tool_search calls so the loaded
+	// schemas don't pollute the user-facing transcript.
+	hideResult bool
 }
 
 // transcript accumulates the scrollback the user reads in the viewport.
@@ -565,9 +570,10 @@ func (t *transcript) foldEvent(e event.Event) bool {
 			t.resetInflight()
 			label := fmt.Sprintf("◢ %s(%s)", e.ToolUseStart.Name, compactInput(e.ToolUseStart.Input))
 			t.blocks = append(t.blocks, transcriptBlock{
-				kind:    blockTool,
-				content: styles.ToolCall.Render(label),
-				toolID:  e.ToolUseStart.ToolID,
+				kind:       blockTool,
+				content:    styles.ToolCall.Render(label),
+				toolID:     e.ToolUseStart.ToolID,
+				hideResult: e.ToolUseStart.Name == string(tools.TOOL_SEARCH),
 			})
 			if t.toolBlocks == nil {
 				t.toolBlocks = map[string]int{}
@@ -672,10 +678,28 @@ func (t *transcript) attachToolResult(r *event.ToolUseResultPayload) bool {
 		})
 		return true
 	}
+	if t.blocks[idx].hideResult {
+		// tool_search and friends: replace the schema-laden payload
+		// with a terse summary so users don't see the full tool
+		// definitions, but still know the call resolved.
+		resultBody = redactedResultBody(r.IsError, body)
+		hasDiff = false
+	}
 	t.blocks[idx].toolResult = resultBody
 	t.blocks[idx].toolResultLines = lineCount(resultBody)
 	t.blocks[idx].noFold = hasDiff
 	return true
+}
+
+// redactedResultBody renders the one-line placeholder shown in place
+// of a hidden tool result. Errors are still surfaced — the body of an
+// error is small and worth seeing — but successful payloads collapse
+// to "▸ schema loaded".
+func redactedResultBody(isError bool, body string) string {
+	if isError {
+		return styles.ToolErr.Render("  ✘ ") + styles.ToolErr.Render(body)
+	}
+	return styles.ToolOK.Render("  ▸ ") + styles.ToolResult.Render("schema loaded")
 }
 
 // composeToolBlock returns the rendered body for a blockTool: the head

@@ -99,6 +99,29 @@ func (a *Agent) drainAsyncSubagents() {
 	a.logger.Debug("subagents.drained", "count", len(completed))
 }
 
+// drainWakeupPrompts pulls every prompt the SCHEDULE_WAKEUP tool has
+// enqueued since the last iteration and appends each one as a fresh
+// RoleUser message — so the next LLM call sees them exactly as if the
+// user just typed them.
+//
+// Runs at the top of every iteration alongside drainAsyncSubagents.
+// The queue is per-ToolState (per-agent), so subagents can use the tool
+// too without crossing wires — though in practice only the root profile
+// exposes SCHEDULE_WAKEUP today.
+func (a *Agent) drainWakeupPrompts() {
+	if !a.toolState.HasWakeupQueue() {
+		return
+	}
+	prompts := a.toolState.WakeupQueue().Drain()
+	if len(prompts) == 0 {
+		return
+	}
+	for _, p := range prompts {
+		a.session.Append(llm.Message{Role: llm.RoleUser, Content: p})
+	}
+	a.logger.Debug("wakeup.drained", "count", len(prompts))
+}
+
 // thinking opens an LLM call to advance the conversation. The actual
 // transport work (Complete vs Stream branching, chunk routing) lives in
 // llmCall; this method exists only to set the status and emit the

@@ -137,6 +137,8 @@ func Main(provider constant.LLMProvider, model constant.Model, sysPrompt string,
 // docs lookup). Useful for sub-agents whose job is to inspect without risk
 // of modification.
 func Explore(provider constant.LLMProvider, model constant.Model, options []llm.Option) Profile {
+	options = append(options, llm.WithSystem(dummyExploreSystemPrompt))
+
 	return Profile{
 		Type:         EXPLORE,
 		SystemPrompt: dummyExploreSystemPrompt,
@@ -150,6 +152,8 @@ func Explore(provider constant.LLMProvider, model constant.Model, options []llm.
 // General returns a minimal profile carrying only the tool names the caller
 // supplies as active. No deferred tools. Useful for narrow-purpose sub-agents.
 func General(provider constant.LLMProvider, model constant.Model, options []llm.Option, toolset ...tools.ToolName) Profile {
+	options = append(options, llm.WithSystem(dummyGeneralSystemPrompt))
+
 	return Profile{
 		Type:         GENERAL_PURPOSE,
 		SystemPrompt: dummyGeneralSystemPrompt,
