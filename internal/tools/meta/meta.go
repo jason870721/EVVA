@@ -14,9 +14,10 @@ func Names() []tools.ToolName {
 	return []tools.ToolName{tools.AGENT, tools.TOOL_SEARCH, tools.SKILL, tools.SCHEDULE_WAKEUP}
 }
 
-// The real AGENT and TOOL_SEARCH tools live in agent.go and toolsearch.go
-// respectively (both need agent-layer hooks). Skill and Wakeup remain
-// stub singletons here.
+// The real AGENT, TOOL_SEARCH, and SCHEDULE_WAKEUP tools live in their
+// own files (agent.go / toolsearch.go / wakeup.go) — each needs an
+// agent-layer hook (spawner, lookup, wakeup queue). Skill remains a
+// stub singleton here.
 
 var (
 	Skill tools.Tool = tools.NewStub(
@@ -37,28 +38,6 @@ var (
 			"properties":{
 				"skill":{"type":"string","description":"The name of a skill from the available-skills list. Do not guess names."},
 				"args":{"type":"string","description":"Optional arguments for the skill"}
-			}
-		}`,
-	)
-
-	Wakeup tools.Tool = tools.NewStub(
-		tools.SCHEDULE_WAKEUP,
-		"Schedule when to resume work in /loop dynamic mode — the user invoked /loop without an interval, "+
-			"asking you to self-pace iterations of a specific task.\n\n"+
-			"Pass the same /loop prompt back via `prompt` each turn so the next firing repeats the task. "+
-			"For an autonomous /loop (no user prompt), pass the literal sentinel `<<autonomous-loop-dynamic>>` as `prompt` instead. "+
-			"Omit the call to end the loop.\n\n"+
-			"Picking delaySeconds: Anthropic prompt cache has a 5-minute TTL — sleeping past 300s pays a cache miss. "+
-			"Stay <270s for active work (cache warm), commit to 1200s+ when waiting longer is fine. "+
-			"Don't pick exactly 300s.",
-		`{
-			"type":"object",
-			"additionalProperties":false,
-			"required":["delaySeconds","reason","prompt"],
-			"properties":{
-				"delaySeconds":{"type":"number","description":"Seconds from now to wake up. Clamped to [60, 3600] by the runtime."},
-				"prompt":{"type":"string","description":"The /loop input to fire on wake-up. Pass the same input verbatim each turn, or use the <<autonomous-loop-dynamic>> sentinel for autonomous loops."},
-				"reason":{"type":"string","description":"One short sentence explaining the chosen delay. Shown back to the user."}
 			}
 		}`,
 	)

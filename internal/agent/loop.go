@@ -64,6 +64,12 @@ func (a *Agent) runLoop(ctx context.Context) (string, error) {
 		// next Complete call sees the conversation.
 		a.drainAsyncSubagents()
 
+		// Drain queued wakeup prompts. SCHEDULE_WAKEUP slept inside its
+		// Execute and enqueued its prompt on completion; we land it as
+		// a fresh user message here so the next LLM call sees it as if
+		// the user just typed it.
+		a.drainWakeupPrompts()
+
 		a.logger.Debug("turn.start", "iter", iter, "messages", len(a.session.Messages))
 		resp, err := a.thinking(ctx, iter)
 		if err != nil {

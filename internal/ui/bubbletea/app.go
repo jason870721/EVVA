@@ -859,16 +859,30 @@ func (m *rootModel) handleAgentEvent(e event.Event) (tea.Model, tea.Cmd) {
 	// if every task is completed. If so, fold the snapshot into the
 	// transcript as a green block and clear the live store so the
 	// panel collapses. Agent-owned data — no user action required.
+	//
+	// The Clear must NOT happen on this goroutine. Clear notifies one
+	// "removed" change per task; each notify reaches a.emit which calls
+	// program.Send, and bubbletea v1.3.x's msgs channel is unbuffered
+	// with the Update goroutine as its only drainer — calling Send from
+	// inside Update deadlocks the whole UI (and then the agent loop,
+	// once it next tries to emit through a.emitMu). We return a tea.Cmd
+	// so the Clear runs off-goroutine; the cascade of "removed" events
+	// is then free to flow through the normal msg → Update path.
+	var cmd tea.Cmd
 	if e.Kind == event.KindStoreUpdate && e.StoreUpdate != nil && e.StoreUpdate.Domain == task.Domain {
 		if m.controller != nil && AllTasksCompleted(m.controller.ToolState()) {
 			snap := renderTasksCompleteSnapshot(m.controller.ToolState(), m.bodyWidth())
 			m.transcript.appendBlock(snap)
-			m.controller.ToolState().TaskStore().Clear()
+			ts := m.controller.ToolState()
+			cmd = func() tea.Msg {
+				ts.TaskStore().Clear()
+				return nil
+			}
 		}
 	}
 	// Layout may need to recompute (panel appearing / disappearing).
 	m.layoutSizes()
-	return m, nil
+	return m, cmd
 }
 
 // updateStateFromEvent advances m.state in response to one agent event.

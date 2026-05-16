@@ -56,7 +56,8 @@ type ToolState struct {
 	// the host (cmd/evva) installs the right approver for the current
 	// UI mode (TUI overlay or stdin prompt) via SetApprover BEFORE the
 	// agent builds its tool list. nil = no gate (auto-approve).
-	approver fs.Approver
+	approver    fs.Approver
+	wakeupQueue *meta.WakeupQueue
 	// Future: monitorBus, cronService, skillLoader, ...
 
 	// TaskGroup registry — every observable.Store registered here fans its
@@ -186,6 +187,23 @@ func (s *ToolState) AgentGroup() *meta.SpawnGroup {
 	return s.subAgentGroup
 }
 
+// HasWakeupQueue reports whether a WakeupQueue has already been allocated.
+// The agent loop uses this to skip the drain call in runs that never built
+// the SCHEDULE_WAKEUP tool (avoids the lazy allocation just to peek at an
+// empty queue).
+func (s *ToolState) HasWakeupQueue() bool { return s.wakeupQueue != nil }
+
+// WakeupQueue returns the SCHEDULE_WAKEUP side-channel, allocating one on
+// first use. WakeupTool Enqueue's the prompt here when its sleep finishes;
+// the agent loop Drain's the queue at the top of every iteration and
+// appends each entry as a RoleUser message.
+func (s *ToolState) WakeupQueue() *meta.WakeupQueue {
+	if s.wakeupQueue == nil {
+		s.wakeupQueue = meta.NewWakeupQueue()
+	}
+	return s.wakeupQueue
+}
+
 // Describe returns the metadata (tools.Descriptor) for a tool name without
 // registering the tool with any agent. Internally this constructs a
 // throwaway instance just long enough to read its static metadata fields
@@ -256,7 +274,7 @@ func buildOne(name tools.ToolName, s *ToolState) (tools.Tool, error) {
 	case tools.SKILL:
 		return meta.Skill, nil
 	case tools.SCHEDULE_WAKEUP:
-		return meta.Wakeup, nil
+		return meta.NewWakeup(s.WakeupQueue()), nil
 
 	// --- task (stateful — all six share one *TaskGroup via ToolState) ---
 	case tools.TASK_CREATE:

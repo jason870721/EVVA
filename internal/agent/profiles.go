@@ -89,15 +89,15 @@ type Profile struct {
 	Stream bool
 }
 
-const mainSystemPrompt = `You are evva, a helpful coding assistant operating
+const dummyMainSystemPrompt = `You are evva, a helpful coding assistant operating
 in a terminal. You have full read/write access to the local filesystem and
 may use any registered tool. Be concise; prefer running tools over guessing.`
 
-const exploreSystemPrompt = `You are an explorer agent. Your access is
+const dummyExploreSystemPrompt = `You are an explorer agent. Your access is
 read-only — you may inspect files but never modify them. Answer questions
 about the codebase concisely and cite file paths when relevant.`
 
-const generalSystemPrompt = `You are a focused sub-agent. Complete the task
+const dummyGeneralSystemPrompt = `You are a focused sub-agent. Complete the task
 described in the user prompt and return a short done. Stay in scope.`
 
 // Main returns the full-kit profile: fs/shell/meta are active; the rest are
@@ -107,10 +107,15 @@ described in the user prompt and return a short done. Stay in scope.`
 // chunk adapter falls back cleanly for providers without native streaming.
 // Callers who want the old buffered behavior can pass WithStream(false) at
 // agent construction.
-func Main(provider constant.LLMProvider, model constant.Model, options []llm.Option) Profile {
+func Main(provider constant.LLMProvider, model constant.Model, sysPrompt string, options []llm.Option) Profile {
+	if sysPrompt == "" {
+		options = append(options, llm.WithSystem(dummyMainSystemPrompt))
+	}
+	options = append(options, llm.WithSystem(sysPrompt))
+
 	return Profile{
 		Type:         MAIN,
-		SystemPrompt: mainSystemPrompt,
+		SystemPrompt: sysPrompt,
 		ActiveTools:  slices.Concat(fs.Names(), shell.Names(), meta.Names()),
 		DeferredTools: slices.Concat(
 			task.Names(),
@@ -132,9 +137,11 @@ func Main(provider constant.LLMProvider, model constant.Model, options []llm.Opt
 // docs lookup). Useful for sub-agents whose job is to inspect without risk
 // of modification.
 func Explore(provider constant.LLMProvider, model constant.Model, options []llm.Option) Profile {
+	options = append(options, llm.WithSystem(dummyExploreSystemPrompt))
+
 	return Profile{
 		Type:         EXPLORE,
-		SystemPrompt: exploreSystemPrompt,
+		SystemPrompt: dummyExploreSystemPrompt,
 		ActiveTools:  []tools.ToolName{tools.READ_FILE, tools.WEB_SEARCH, tools.TREE, tools.GREP},
 		LLMProvider:  provider,
 		LLMModel:     model,
@@ -145,9 +152,11 @@ func Explore(provider constant.LLMProvider, model constant.Model, options []llm.
 // General returns a minimal profile carrying only the tool names the caller
 // supplies as active. No deferred tools. Useful for narrow-purpose sub-agents.
 func General(provider constant.LLMProvider, model constant.Model, options []llm.Option, toolset ...tools.ToolName) Profile {
+	options = append(options, llm.WithSystem(dummyGeneralSystemPrompt))
+
 	return Profile{
 		Type:         GENERAL_PURPOSE,
-		SystemPrompt: generalSystemPrompt,
+		SystemPrompt: dummyGeneralSystemPrompt,
 		ActiveTools:  toolset,
 		LLMProvider:  provider,
 		LLMModel:     model,

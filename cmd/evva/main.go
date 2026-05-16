@@ -16,6 +16,7 @@ import (
 	config "github.com/johnny1110/evva/configs"
 	"github.com/johnny1110/evva/internal/agent"
 	"github.com/johnny1110/evva/internal/agent/event"
+	"github.com/johnny1110/evva/internal/agent/sysprompt"
 	"github.com/johnny1110/evva/internal/constant"
 	"github.com/johnny1110/evva/internal/llm"
 	"github.com/johnny1110/evva/internal/tools/fs"
@@ -47,7 +48,9 @@ func main() {
 	noTUI := flag.Bool("no-tui", false, "disable the bubbletea TUI; read a prompt and run once with plain CLI output")
 	flag.Parse()
 
-	prof := agent.Main(constant.DEEPSEEK, constant.DEEPSEEK_V4_FLASH, buildOptions(*temp, *maxTokens))
+	prof := agent.Main(constant.DEEPSEEK, constant.DEEPSEEK_V4_FLASH,
+		sysprompt.Build(sysprompt.Default(cfg.AppName, cfg.EvvaHome)),
+		buildOptions(*temp, *maxTokens))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -307,14 +310,14 @@ func readPrompt(args []string) (string, error) {
 //
 // Options (mirrored from the TUI's vertical menu):
 //
-//   1 / y / yes → approve this one
-//   2 / a / all → approve this one AND every remaining fs mutation in
-//                 the session (sticky; resets only on process exit)
-//   3           → decline AND prompt for redirection text — the
-//                 follow-up line is returned as Decision.Feedback so
-//                 the agent can re-plan against the user's intent
-//   4 / n / no  → decline this one (no feedback)
-//   anything else / EOF → decline (no feedback)
+//	1 / y / yes → approve this one
+//	2 / a / all → approve this one AND every remaining fs mutation in
+//	              the session (sticky; resets only on process exit)
+//	3           → decline AND prompt for redirection text — the
+//	              follow-up line is returned as Decision.Feedback so
+//	              the agent can re-plan against the user's intent
+//	4 / n / no  → decline this one (no feedback)
+//	anything else / EOF → decline (no feedback)
 //
 // EOF → decline keeps piped runs safe: `echo prompt | evva -no-tui`
 // can't quietly approve writes when stdin is already drained.
@@ -435,9 +438,6 @@ func buildOptions(temp float64, maxTokens int) []llm.Option {
 	if maxTokens > 0 {
 		out = append(out, llm.WithMaxTokens(maxTokens))
 	}
-
-	out = append(out, llm.WithSystem("You are a helpful coding agent operating in a terminal. Use tools when they help."))
-
 	return out
 }
 
