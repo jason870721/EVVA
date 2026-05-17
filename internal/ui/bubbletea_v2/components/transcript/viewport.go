@@ -94,5 +94,22 @@ func (v *View) GotoBottom() {
 	v.vp.GotoBottom()
 }
 
+// RevealBlock scrolls the viewport so the block with the given ID
+// is visible (its starting line lands near the top of the visible
+// window). Disables follow mode so streaming content doesn't yank
+// the user back to the bottom mid-search.
+//
+// Returns true when the block was found and scrolled; false when
+// the block isn't in the scrollback.
+func (v *View) RevealBlock(id uint64) bool {
+	off := v.tr.LineOffsetOf(id)
+	if off < 0 {
+		return false
+	}
+	v.follow = false
+	v.vp.SetYOffset(off)
+	return true
+}
+
 // Following reports follow-mode state. Test-only.
 func (v *View) Following() bool { return v.follow }

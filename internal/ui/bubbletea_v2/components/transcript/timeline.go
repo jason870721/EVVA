@@ -21,22 +21,29 @@ import (
 // Gutter glyphs are styled with theme.Timeline (muted grey) so they
 // sit back as chrome, not as content.
 
-// gutterStyle picks the muted-or-accent style depending on whether
-// the block is the yank-mode focused one (M8). Centralised here so
-// every gutter helper shares the same swap.
-func gutterStyle(th *theme.Theme, accent bool) lipgloss.Style {
-	if accent {
+// gutterStyle picks the muted / accent / match style for a block's
+// gutter glyphs. Precedence: yank-mode focus (cyan) wins over
+// search-match highlight (yellow); plain muted grey is the
+// fallback. Centralised here so every gutter helper shares the
+// same swap.
+func gutterStyle(th *theme.Theme, focused, matched bool) lipgloss.Style {
+	switch {
+	case focused:
 		return th.TimelineAccent
+	case matched:
+		return th.TimelineMatch
+	default:
+		return th.Timeline
 	}
-	return th.Timeline
 }
 
 // applyLineGutter prepends `│ ` to every line of s. Empty input
 // emits a single pipe line so a blank block still occupies one row
-// of the timeline. accent=true switches the glyph to the cyan-bold
-// variant used by yank-mode to highlight the focused block.
-func applyLineGutter(s string, width int, th *theme.Theme, accent bool) string {
-	g := gutterStyle(th, accent)
+// of the timeline. focused selects the cyan yank-mode accent;
+// matched selects the yellow search-match accent. focused wins
+// when both are true.
+func applyLineGutter(s string, width int, th *theme.Theme, focused, matched bool) string {
+	g := gutterStyle(th, focused, matched)
 	if s == "" {
 		return g.Render("│")
 	}
@@ -52,9 +59,9 @@ func applyLineGutter(s string, width int, th *theme.Theme, accent bool) string {
 // applyToolGutter prefixes the first line with `├─ ` (branch-out
 // connector) and subsequent lines with `│  ` so the body sits in
 // line with the connector's arm. Content wraps to (width-3) — gutter
-// is 3 cols here. accent=true uses the cyan-bold variant.
-func applyToolGutter(s string, width int, th *theme.Theme, accent bool) string {
-	g := gutterStyle(th, accent)
+// is 3 cols here. focused/matched semantics match applyLineGutter.
+func applyToolGutter(s string, width int, th *theme.Theme, focused, matched bool) string {
+	g := gutterStyle(th, focused, matched)
 	if s == "" {
 		return g.Render("├─")
 	}

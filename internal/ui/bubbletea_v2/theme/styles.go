@@ -79,6 +79,7 @@ type Theme struct {
 	Timeline       lipgloss.Style
 	TimelineCut    lipgloss.Style
 	TimelineAccent lipgloss.Style // cyan-bold variant for yank-mode focus
+	TimelineMatch  lipgloss.Style // yellow-bold variant for search-match blocks
 
 	// Context HUD (status-bar context bar).
 	ContextBar  lipgloss.Style
@@ -166,6 +167,7 @@ func Default() *Theme {
 	t.Timeline = lipgloss.NewStyle().Foreground(muted)
 	t.TimelineCut = lipgloss.NewStyle().Foreground(purple).Bold(true)
 	t.TimelineAccent = lipgloss.NewStyle().Foreground(cyan).Bold(true)
+	t.TimelineMatch = lipgloss.NewStyle().Foreground(yellow).Bold(true)
 
 	// Context HUD
 	t.ContextBar = lipgloss.NewStyle().Foreground(muted)

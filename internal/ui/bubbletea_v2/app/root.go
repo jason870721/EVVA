@@ -212,6 +212,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.view.MarkDirty()
 		return a, nil
 
+	case overlays.SearchRevealMsg:
+		// The search overlay moved its match cursor. Scroll the
+		// viewport so the target block is visible AND re-render
+		// so any new match-accent gutter colors paint.
+		a.view.RevealBlock(m.BlockID)
+		a.view.MarkDirty()
+		return a, nil
+
 	case overlays.CompactDoneMsg:
 		if m.Err != nil {
 			a.state.SetHint("compact failed: " + m.Err.Error())
@@ -438,6 +446,20 @@ func (a *App) handleKey(m tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.view.MarkDirty()
 		a.relayout()
 		return a, nil
+
+	case "ctrl+f":
+		// Open transcript search. Empty transcripts skip silently.
+		if a.transcript == nil || len(a.transcript.Blocks()) == 0 {
+			return a, nil
+		}
+		s := overlays.NewSearch(a.transcript)
+		if s == nil {
+			return a, nil
+		}
+		a.focus.Push(s)
+		a.view.MarkDirty()
+		a.relayout()
+		return a, s.BlinkCmd()
 
 	case "pgup", "pgdown", "home", "end":
 		return a, a.view.Update(m)

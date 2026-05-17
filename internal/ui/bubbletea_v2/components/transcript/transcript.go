@@ -63,6 +63,14 @@ type Transcript struct {
 	// RenderOpts{Focused: true} for the matching block so its
 	// gutter renders in the cyan accent style.
 	focusedID uint64
+
+	// matches maps Block.ID() to the byte ranges in PlainText()
+	// where the current search query matched. View() forwards
+	// these via RenderOpts.Highlights so the block's gutter
+	// renders in the yellow match-accent style (per-character
+	// highlighting is deferred — M9 paints whole-block accent
+	// only). Nil / empty when no search is active.
+	matches map[uint64][]Range
 }
 
 // New constructs a transcript with no blocks. The caller must call
@@ -202,6 +210,77 @@ func (t *Transcript) SetFocusedBlock(id uint64) {
 // FocusedBlock returns the currently focused Block ID, or 0 when
 // no yank focus is active. Test-only / yank-mode internal use.
 func (t *Transcript) FocusedBlock() uint64 { return t.focusedID }
+
+// SetSearchMatches installs the current search-result map. View()
+// passes RenderOpts.Highlights for any block in the map; blocks
+// without an entry render normally.
+//
+// Passing nil clears the search highlight. The cache invalidates
+// for each block whose Highlights signature changed (via optsRev),
+// which means: every previously-matched block re-renders, every
+// newly-matched block re-renders, and untouched blocks stay
+// cached.
+func (t *Transcript) SetSearchMatches(m map[uint64][]Range) {
+	t.matches = m
+}
+
+// MatchedBlocks returns the IDs of every block with at least one
+// search match, in transcript order. Search overlay uses this as
+// the navigation cursor target list.
+func (t *Transcript) MatchedBlocks() []uint64 {
+	if len(t.matches) == 0 {
+		return nil
+	}
+	out := make([]uint64, 0, len(t.matches))
+	for _, b := range t.blocks {
+		if _, ok := t.matches[b.ID()]; ok {
+			out = append(out, b.ID())
+		}
+	}
+	return out
+}
+
+// LineOffsetOf returns the rendered line index where the block
+// with the given ID begins, or -1 when the block isn't in the
+// scrollback. Used by the View's RevealBlock to scroll the
+// viewport so the target is visible.
+//
+// Walks the cached output by counting newlines in each block's
+// rendered string plus the inter-block spacer. Cheap — strings
+// are already in the cache, no re-render happens.
+func (t *Transcript) LineOffsetOf(id uint64) int {
+	if t.width < 1 || t.theme == nil {
+		return -1
+	}
+	baseCtx := RenderContext{
+		Width:    t.width,
+		Theme:    t.theme,
+		Markdown: t.markdown,
+	}
+	offset := 0
+	for i, b := range t.blocks {
+		if b.ID() == id {
+			return offset
+		}
+		ctx := baseCtx
+		if t.focusedID != 0 && b.ID() == t.focusedID {
+			ctx.Opts.Focused = true
+		}
+		if hits, ok := t.matches[b.ID()]; ok && len(hits) > 0 {
+			ctx.Opts.Highlights = hits
+		}
+		rendered := t.cache.Get(b, ctx)
+		offset += strings.Count(rendered, "\n") + 1
+		// Inter-block spacer (one line) — every adjacent pair
+		// except after a banner-to-X transition where the spacer
+		// is "" (still one line via the View's "\n" + spacer
+		// pattern).
+		if i < len(t.blocks)-1 {
+			offset++
+		}
+	}
+	return -1
+}
 
 // SetSpinnerFrame updates the live compaction row's animation
 // frame, if one exists. No-op when no compaction is in flight.
@@ -449,9 +528,13 @@ func (t *Transcript) View() string {
 			out.WriteByte('\n')
 		}
 		ctx := baseCtx
-		// Per-block opts: focus flag for the yank-mode cursor.
+		// Per-block opts: focus flag for the yank-mode cursor;
+		// highlights slice for search-match highlighting.
 		if t.focusedID != 0 && b.ID() == t.focusedID {
 			ctx.Opts.Focused = true
+		}
+		if hits, ok := t.matches[b.ID()]; ok && len(hits) > 0 {
+			ctx.Opts.Highlights = hits
 		}
 		out.WriteString(t.cache.Get(b, ctx))
 		// Inter-block spacer: empty line with optional gutter pipe.

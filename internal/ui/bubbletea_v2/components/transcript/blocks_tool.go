@@ -149,7 +149,7 @@ func (b *ToolBlock) Render(ctx RenderContext) string {
 	b.resultLines = styledLines
 
 	body := b.compose()
-	return applyToolGutter(body, ctx.Width, ctx.Theme, ctx.Opts.Focused)
+	return applyToolGutter(body, ctx.Width, ctx.Theme, ctx.Opts.Focused, len(ctx.Opts.Highlights) > 0)
 }
 
 // styleResultBody produces the multi-line styled result + optional
