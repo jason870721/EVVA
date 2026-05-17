@@ -26,8 +26,9 @@ type AppConfig struct {
 	LogDir    *string // default: nil → stdout only
 
 	// Application
-	AppEnv  string // default: "development"
-	AppName string // default: "app"
+	AppEnv     string // default: "development"
+	AppName    string // default: "app"
+	AppVersion string
 
 	// Global config dir
 	EvvaHome             string
@@ -235,6 +236,7 @@ var (
 )
 
 const AppName = "evva"
+const AppVersion = "0.1.0"
 
 // Get returns the singleton AppConfig, initializing it on first call.
 // Safe for concurrent use — subsequent calls after the first are lock-free reads.
@@ -283,9 +285,10 @@ func load() *AppConfig {
 	}
 
 	cfg := &AppConfig{
-		AppName: AppName,
-		OS:      runtime.GOOS,
-		AppEnv:  getEnvDefaultLowerCase("APP_ENV", "dev"),
+		AppName:    AppName,
+		AppVersion: AppVersion,
+		OS:         runtime.GOOS,
+		AppEnv:     getEnvDefaultLowerCase("APP_ENV", "dev"),
 
 		// log
 		LogLevel:  getEnvDefaultLowerCase("LOG_LEVEL", "info"),

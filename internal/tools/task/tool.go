@@ -177,6 +177,7 @@ func (t *UpdateTool) Name() string { return string(tools.TASK_UPDATE) }
 func (t *UpdateTool) Description() string {
 	return "Update an existing task — status, subject, description, owner, dependencies. " +
 		"Status flow: pending → in_progress → completed (use `deleted` to permanently remove). " +
+		"Only 1 in_progress task at a time. " +
 		"Only mark completed when work is fully done."
 }
 

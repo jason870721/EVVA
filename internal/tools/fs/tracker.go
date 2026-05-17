@@ -1,11 +1,15 @@
 package fs
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"sync"
+)
 
 // ReadTracker records file paths the agent has called read_file on.
 // Zero value is ready to use.
 type ReadTracker struct {
 	seen map[string]struct{}
+	mu   sync.RWMutex
 }
 
 func NewReadTracker() *ReadTracker {
@@ -16,6 +20,9 @@ func NewReadTracker() *ReadTracker {
 
 // MarkRead records that path was read.
 func (t *ReadTracker) MarkRead(absPath string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if t.seen == nil {
 		t.seen = make(map[string]struct{})
 	}
@@ -24,6 +31,9 @@ func (t *ReadTracker) MarkRead(absPath string) {
 
 // WasRead reports whether path has been marked via MarkRead.
 func (t *ReadTracker) WasRead(absPath string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	if t.seen == nil {
 		return false
 	}
