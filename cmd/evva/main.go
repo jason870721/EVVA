@@ -23,7 +23,6 @@ import (
 	"github.com/johnny1110/evva/internal/tools/skill"
 	"github.com/johnny1110/evva/internal/tools/task"
 	"github.com/johnny1110/evva/internal/ui"
-	"github.com/johnny1110/evva/internal/ui/bubbletea"
 	bubbleteav2 "github.com/johnny1110/evva/internal/ui/bubbletea_v2"
 	"github.com/joho/godotenv"
 )
@@ -48,7 +47,7 @@ func main() {
 	maxTokens := flag.Int("max-tokens", cfg.DefaultMaxTokens, "max output tokens (0 → provider default)")
 	maxIters := flag.Int("max-iters", cfg.DefaultMaxIterations, "max loop iterations before pausing for Continue")
 	noTUI := flag.Bool("no-tui", false, "disable the bubbletea TUI; read a prompt and run once with plain CLI output")
-	uiKind := flag.String("ui", "v1", "TUI implementation: v1 | v2 (v2 is in active development)")
+	uiKind := flag.String("ui", "v2", "TUI implementation: v1 | v2 (v2 is in active development)")
 	flag.Parse()
 
 	registry, _ := skill.LoadRegistry(cfg.EvvaHomeSkillsDir, cfg.WorkDirSkillsDir)
@@ -97,10 +96,8 @@ func skillRefsFromRegistry(r *skill.Registry) []sysprompt.SkillRef {
 func runTUI(ctx context.Context, prof agent.Profile, maxIters int, name, evvaHome string, skills *skill.Registry, kind string) {
 	var tui ui.UI
 	switch kind {
-	case "v2":
-		tui = bubbleteav2.New(evvaHome)
 	default:
-		tui = bubbletea.New(evvaHome)
+		tui = bubbleteav2.New(evvaHome)
 	}
 	ag, err := agent.New(nil, prof,
 		agent.WithName(name),

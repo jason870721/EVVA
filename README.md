@@ -193,8 +193,55 @@ Switching is refused if a run is in flight; press Esc first to cancel, then `/mo
 | `Ctrl+C` | once: cancel running task · idle: quit |
 | `Ctrl+D` | quit (when input is empty) |
 | `Ctrl+O` | toggle expand-all tool results (fold/unfold long bash + read output) |
+| `Ctrl+Y` | open **yank mode** — pick a block and copy its clean content (see below) |
+| `Ctrl+F` | open **transcript search** — type a query, `Enter`/`n` cycles matches |
 | `PgUp` / `PgDown` / `Home` / `End` | scroll transcript |
 | mouse wheel | scroll transcript |
+
+### Copying from the transcript — **yank mode**
+
+The transcript renders each block with a left-edge timeline gutter (`│`, `├─`, etc.) so the conversation reads as a structured stream. The downside: a normal terminal drag-select copies whatever is visually on screen — gutter glyphs included. Pasting that into another window gives you something like:
+
+```
+▶ who are you?
+│
+│ I'm evva — an interactive coding assistant…
+│
+```
+
+To copy clean content without the chrome, evva ships a **yank mode** that knows about block boundaries. It's the canonical clean-copy path; on terminals that don't fully support clipboard escapes, it's also the only one that works at all.
+
+**Open with `Ctrl+Y`.** A cyan-bold gutter accent appears on one block at a time; the contextual hint above the status bar shows your cursor position (`yank 3/5`) and the key map.
+
+| key | effect |
+| --- | --- |
+| `j` / `↓` | next block (newer) |
+| `k` / `↑` | previous block (older) |
+| `g` | jump to the first block |
+| `G` | jump to the last block |
+| `Enter` / `c` | copy the focused block's clean text to the system clipboard |
+| `e` | toggle expand-all on this block only (handy for long tool results before copying) |
+| `q` / `Esc` | exit yank mode (clears the accent) |
+| `Ctrl+C` | exit + quit evva |
+
+**What gets copied.** Each block exposes a `PlainText()` view that strips ANSI escapes and gutter glyphs. For a user prompt that's the prompt text. For assistant text it's the markdown source (not the rendered output). For a tool block it's the call head (`◢ name(...)`) followed by the result body. The status bar flashes `copied N chars` on success.
+
+**How it gets there — OSC52.** Yank mode writes the payload to your clipboard using the [OSC52](https://wezfurlong.org/wezterm/escape-sequences.html#operating-system-command-sequences) terminal escape sequence. No external library, no `pbcopy` shell-out. The terminal forwards the escape to the OS clipboard.
+
+| terminal | works out of the box? |
+| --- | --- |
+| **iTerm2** | yes (default) |
+| **kitty** | yes |
+| **WezTerm** | yes |
+| **Alacritty** | yes |
+| **Ghostty** | yes |
+| **Apple Terminal.app** | no by default — enable `Edit → Allow clipboard access` or switch terminals |
+| **tmux** | yes if `set -g set-clipboard on` |
+| **GNU screen** | mostly broken; use Ctrl+Y from inside a host terminal instead |
+
+If the write fails (payload too large at >100 KB, terminal blocked it), the status bar shows `clipboard: <error>` and yank mode stays open so you can try a different block.
+
+**Why not native drag-select?** evva turns on mouse capture so the wheel can scroll the transcript. That trade-off means drag-and-drop copy stops happening natively — and even when modern terminals honor a `Shift`/`Alt`+drag escape hatch, the resulting selection still includes the rendered gutter glyphs (since they're part of what's painted on screen). Yank mode is the workflow that round-trips clean content out of the program.
 
 ### Approval prompts (filesystem writes)
 

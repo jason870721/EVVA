@@ -34,12 +34,18 @@ type RunDoneMsg struct {
 	Err error
 }
 
-// ClipboardMsg is the result of an OSC52 clipboard write. Dispatched
-// by mouse.WriteOSC52's returned tea.Cmd once the escape sequence
-// has been written to stderr. The App reads it to flash a transient
-// status hint ("copied N chars" or "clipboard write failed").
+// ClipboardMsg is the result of a clipboard-copy attempt.
+// Dispatched by mouse.Copy's returned tea.Cmd after both the
+// native OS-clipboard write (pbcopy/xclip/etc.) and the OSC52
+// terminal escape have been attempted. The App reads it to flash a
+// transient status hint ("copied N chars" or "clipboard: …").
+//
+// Method records which path actually succeeded so a future-debugging
+// user can tell whether their terminal is honoring OSC52 or the
+// payload landed via a subprocess.
 type ClipboardMsg struct {
-	OK   bool
-	Size int   // bytes written when OK; informational when !OK
-	Err  error // populated when OK=false
+	OK     bool
+	Size   int    // bytes written when OK; informational when !OK
+	Method string // "native" | "osc52" | "" on failure
+	Err    error  // populated when OK=false
 }

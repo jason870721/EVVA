@@ -199,7 +199,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case events.ClipboardMsg:
 		if m.OK {
-			a.state.SetHint(fmt.Sprintf("copied %d chars", m.Size))
+			// Include the backend so the user can tell whether the
+			// payload landed via pbcopy/xclip (native) or via the
+			// OSC52 escape — useful when the terminal claims OSC52
+			// support but is silently dropping the escape.
+			a.state.SetHint(fmt.Sprintf("copied %d chars (%s)", m.Size, m.Method))
 		} else if m.Err != nil {
 			a.state.SetHint("clipboard: " + m.Err.Error())
 		}

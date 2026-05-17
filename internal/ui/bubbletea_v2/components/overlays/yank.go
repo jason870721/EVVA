@@ -145,7 +145,7 @@ func (y *Yank) Update(msg tea.Msg) (bool, tea.Cmd) {
 		// The actual write returns a ClipboardMsg that the App
 		// surfaces in the status hint. Yank mode stays open so the
 		// user can copy another block immediately.
-		return false, mouse.WriteOSC52(text)
+		return false, mouse.Copy(text)
 
 	case "e":
 		// Per-block expand toggle — only meaningful for tool
