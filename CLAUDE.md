@@ -1,119 +1,199 @@
-# EVVA ReAct coding agent
+# evva — Project Vision and Roadmap
 
-## What is EVVAgent?
+## Vision
 
-`evva` runs a tool-using LLM agent in your terminal. It speaks Anthropic Claude, DeepSeek, OpenAI, and Ollama through one `llm.Client` interface; dispatches multiple tool calls per turn in parallel; tracks tasks and sub-agents through an observable store; and renders into a bubbletea TUI or a plain-text CLI sink.
+`evva` is a ReAct coding agent for the terminal, written in Go. The architecture follows Claude Code in spirit but keeps the moving parts small on purpose: one narrow `llm.Client` interface bridging multiple providers (Anthropic, DeepSeek, OpenAI, Ollama), one `tools.Tool` interface, one observable store fanning state to any UI implementation, one agent loop.
 
-The architecture is small on purpose — adding a new LLM provider, panel, or UI implementation is roughly one package each. evva is written in golang.
+The unifying idea is **one runtime, many personas, swappable UI**:
 
-### EVVA_HOME Dir 
+- A **persona** is a main-tier agent definition — its own tools, system prompt, model preference, and personality. `evva` (a professional software engineer) is one persona. `nono` (a financial manager), `noen` (a math teacher), and any others a user creates are siblings, not subclasses.
+- The same runtime drives every persona. Switching personas is `/profile <name>`, not a new binary.
+- A persona can spawn another persona as a subagent for cross-domain work — `evva` can delegate a costing question to `nono` without leaving the session.
+- Adding a new LLM provider, tool family, persona, or UI implementation is a one-package change.
+
+`evva` is **not** trying to be a drop-in Claude Code. It borrows the harness shape because that shape is what current frontier models behave best under, and it ports tool descriptions verbatim where reasonable so the model sees prompts close to what it was trained on. Where Go semantics, terminal constraints, or evva's narrower scope justify divergence, it diverges intentionally.
+
+The reference TypeScript source lives at `evva/ref/src/`. Treat it as the source of truth for tool descriptions, harness structure, and agent definitions — port from it, don't reinvent.
+
+---
+
+## Memory model
+
+Two files, two scopes:
+
+- `<workdir>/EVVA.md` — **project memory**. User-authored conventions, repo-specific rules, hot facts about the codebase. Injected into the system prompt at session start. Same role as Claude Code's `CLAUDE.md`.
+- `<EVVA_HOME>/USER_PROFILE.md` — **user memory**. Long-running notes about the user: preferences, working style, recurring topics, projects they care about. Curated by a dedicated background agent (Phase 9) that reviews the session transcript at session end and merges new observations into the file under a fixed shape (`## Preferences`, `## Working style`, `## Recurring topics`).
+
+Both files are read on every session start. Either can be missing — the prompt builder skips empty sections cleanly.
+
+---
+
+## Agent definitions
+
+All agents — main personas and subagent kinds alike — share one on-disk layout:
 
 ```
-~/.evva/
-├── config/
-│   └── evva-config.yml      # user-tunable settings (auto-created with defaults)
-└── skills/                  # optional skill scripts (your own)
+<EVVA_HOME>/agents/{name}/
+├── system_prompt.md
+├── tools.yml          # { active: [...], deferred: [...] }
+└── meta.yml           # { as: [main, subagent], model: ..., when_to_use: ... }
 ```
 
-`~/.evva/.env` is **optional**. If you want to override deployment knobs (`LOG_LEVEL`, `LOG_DIR`, `APP_ENV`, `LOG_FORMAT`, `SKILLS_DIR`, `USER_PROFILE`), create it; otherwise the built-in defaults apply.
+Built-in agents (Main / Explore / Plan / GeneralPurpose) ship as Go-defined `AgentDefinition` structs. User-authored agents are loaded from disk at startup; the loader merges Go + disk into one registry. `agent_type` is a string, not a closed enum, so external projects can register their own personas (e.g. a future `nono` web service registers as a remote agent endpoint).
 
-<br>
+The `as:` field controls where an agent shows up:
 
-## Using EVVAgent
-
-### TUI at a glance
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ banner box / transcript                                      │
-│                                                              │
-│  ▶ user prompt                                               │
-│  assistant text…                                             │
-│                                                              │
-├──────────────────────────────────────────────────────────────┤
-│ ▰ TASKS         (only when non-empty)                        │
-│   ▶ wire migration                                           │
-├──────────────────────────────────────────────────────────────┤
-│ ‹⠹ explorer› ‹▶ writer› ‹✔ reviewer›   ← active sub-agents   │
-├──────────────────────────────────────────────────────────────┤
-│ overlay panels: /config · /model · approval · suggestions    │
-├──────────────────────────────────────────────────────────────┤
-│ > input                                                      │
-├──────────────────────────────────────────────────────────────┤
-│ ‹⠋ RUN› ◆ evva ◆ ▸ model ◆ in N out M ◆ CTX ▰▰▱…▱ 12%        │
-└──────────────────────────────────────────────────────────────┘
-```
-
-Panels collapse to zero height when empty. Status bar always at the bottom.
-
-<br>
-
-
-### Keybindings (main input)
-
-| key | effect |
+| `as:` value | Visible as |
 | --- | --- |
-| `Enter` | submit |
-| `Ctrl+J` / `Alt+Enter` | insert newline (multi-line composition) |
-| `↑` / `↓` | walk prompt history (when input empty or already navigating) |
-| `Esc` | cancel running task / dismiss panel |
-| `Ctrl+C` | once: cancel running task · idle: quit |
-| `Ctrl+D` | quit (when input is empty) |
-| `Ctrl+O` | toggle expand-all tool results (fold/unfold long bash + read output) |
-| `Ctrl+Y` | open **yank mode** — pick a block and copy its clean content (see below) |
-| `Ctrl+F` | open **transcript search** — type a query, `Enter`/`n` cycles matches |
-| `PgUp` / `PgDown` / `Home` / `End` | scroll transcript |
-| mouse wheel | scroll transcript |
+| `[main]` | `/profile` startup picker only |
+| `[subagent]` | Agent tool's `subagent_type` list only |
+| `[main, subagent]` | Both — used for personas that other personas can delegate to (the `evva → nono` pattern) |
 
-### Copying from the transcript — **yank mode**
+One schema, one loader, two visibility surfaces. This is also the seam Phase 6 (profile switch) uses to enumerate personas.
 
-The transcript renders each block with a left-edge timeline gutter (`│`, `├─`, etc.) so the conversation reads as a structured stream. The downside: a normal terminal drag-select copies whatever is visually on screen — gutter glyphs included. Pasting that into another window gives you something like:
+---
 
-## Configuration
+## Roadmap
 
-### `~/.evva/config/evva-config.yml`
+Phases are ordered by dependency — earlier phases unblock later ones. Each phase is one focused chunk of work: Go ports of the reference TypeScript, plus the connective tissue (memory, permissions, hooks) that ties the harness together.
 
-User-tunable settings. Created automatically on first launch. Edit live via `/config` in the TUI, or by hand:
+### Phase 0 — Sysprompt rework + EVVA.md + USER_PROFILE.md
 
-```yaml
-# Agent loop
-max_iterations: 30
-max_tokens: 4096
-auto_compact_threshold: 0.8
-display_thinking: true
+Foundation. Every later phase ships prompt strings, so the prompt scaffold needs to be stable first.
 
-# Default model used at startup (overwritten by /model swap)
-default_provider: deepseek
-default_model: deepseek-v4-pro
+- Refactor `internal/agent/sysprompt/` from section toggles to **per-agent prompt builders**. Each agent owns its full harness, mirroring `ref/src/tools/AgentTool/built-in/*Agent.ts`.
+- New `internal/memdir/` package. Loads `<workdir>/EVVA.md` and `<EVVA_HOME>/USER_PROFILE.md` and injects them into the sysprompt at session start.
+- Rewrite the harness / tool-guide sections against `ref/src/constants/prompts.ts` and the per-tool prompt files.
+- Wire cross-references (Read ↔ Edit, Agent ↔ subagent_type list, plan-mode ↔ AskUserQuestion) through string constants so descriptions stay consistent as tools evolve.
 
-# Web tooling
-fetch_max_bytes: 100000
-tavily_api_key: ""
+### Phase 1 — Filesystem parity (Read / Write / Edit / Glob)
 
-# Per-provider credentials. Empty api_url falls back to the constant's default.
-providers:
-  anthropic: { api_key: "", api_url: "" }
-  deepseek:  { api_key: "", api_url: "" }
-  openai:    { api_key: "", api_url: "" }
-  ollama:    { api_url: "" }
-```
+Port `ref/src/tools/FileReadTool / FileEditTool / FileWriteTool / GlobTool` descriptions verbatim; drop evva current Write/Edit/Read tools, can copy claude code design.
 
-### `.env` (optional)
+- Port descriptions + parameter schemas + implement from `ref/src/tools/Read/Edit/Write/`.
+- New `internal/tools/fs/glob.go` — mtime-sorted file matching. Today evva has `shell.Grep` + `shell.Tree` but no dedicated Glob.
+- TUI diff render parity for `Edit` and `Write` — match Claude Code's hunk layout.
+- Tighten `ReadTracker` semantics to match Claude Code's "must Read before Edit / overwrite-Write."
 
-Place in your working directory or at `~/.evva/.env`. Only used for deployment / logging knobs — never user preferences:
+### Phase 2 — ToolSearch + AgentTool polish + agent loader
 
-```bash
-APP_ENV=dev            # dev | prod
-LOG_LEVEL=info         # debug | info | warn | error
-LOG_FORMAT=text        # text | json
-LOG_DIR=               # empty → stdout; path → write log files there
-SKILLS_DIR=skills      # subpath under ~/.evva/
-USER_PROFILE=user_profile.md
-```
+Both tools already exist in evva (`internal/tools/meta/`) and roughly match Claude Code's behavior. This phase finishes parity and lays the **extensibility seam** Phase 6 and external projects depend on.
 
-## Logs
+- Port the latest ToolSearch description (`ref/src/tools/ToolSearchTool/prompt.ts`).
+- Port the AgentTool description (`ref/src/tools/AgentTool/prompt.ts`), including the "writing the prompt" / "never delegate understanding" guidance.
+- New `internal/agent/loader/` — reads `<EVVA_HOME>/agents/{name}/` definitions and registers them. Built-ins stay as Go-defined structs; the loader merges Go + disk into one `AgentRegistry`.
+- Replace `toolset.buildOne`'s hard-coded switch (currently ~370 LOC closed enum) with a `Registry.Register(name, factory)` API so external projects can register their own tools at startup.
 
-Per-agent JSON logs land under `log/<agent-id>/<agent-id>.log` by default. Set `LOG_DIR` in `.env` to redirect, or leave it unset to also stream to stdout. `LOG_LEVEL=debug` exposes every iteration's `turn.start` / `llm.call` / `tool.dispatch` / `tool.result` lines — handy when debugging an agent that's stuck or looping.
+### Phase 3 — Permission system + Bash classifier + safe/auto modes
+
+Unblocks plan mode (Phase 7) and worktree (Phase 10). Plan mode is a permission mode, not a standalone tool pair.
+
+Design questions resolved at the start of this phase:
+
+- Rule grammar — glob? regex? per-tool? Reference: `ref/src/utils/permissions/permissionRuleParser.ts`.
+- Storage scope — per-project (`.evva/permissions.yml`) vs per-user vs per-session.
+- Lifecycle — ask-once vs always-allow vs deny; mode transitions (`default` → `accept_edits` → `plan` → `bypass`).
+- Override flow — equivalent of `--dangerously-skip-permissions`, sandbox flag, etc.
+- Subagent inheritance — do subagents inherit parent permissions or get their own?
+
+Work:
+
+- New `internal/permission/` — rule grammar, mode state machine, pre-tool-use hook in the agent loop.
+- Port `ref/src/tools/BashTool/bashClassifier.ts` + `dangerousPatterns.ts` into `internal/tools/shell/classifier.go`.
+- TUI: approval prompt component under `components/approval/`, mode indicator in the status bar.
+- Modes: `default | accept_edits | plan | bypass | auto`.
+
+### Phase 4 — Hooks system
+
+Compositional with permissions. Lets users wire validation, auto-format, custom logging, or block known-bad commands without touching evva's source.
+
+- New `internal/hooks/` — event types (`SessionStart`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `Notification`), dispatcher, settings-file bindings.
+- Wire hook invocations into `internal/agent/loop.go` between iterations and around tool dispatch.
+
+### Phase 5 — TodoWrite (replaces current task_* tools)
+
+evva's current `internal/tools/task/` is **conceptually TodoWrite** — in-session ephemeral planning. The six-tool layout (`task_create`, `task_get`, `task_list`, `task_update`, `task_output`, `task_stop`) doesn't match Claude Code's design and conflates planning with background-process management. Rebuild it.
+
+- Delete `internal/tools/task/` (six tools).
+- Delete `internal/agent/sysprompt/sections.go:taskPlanning()`.
+- New `internal/tools/todo/` — single `todo_write` tool: `todos: [{content, activeForm, status}]`, full-list-replacement semantics. Port description from `ref/src/tools/TodoWriteTool/prompt.ts`.
+- Rename `internal/ui/bubbletea_v2/components/tasks/` → `components/todos/`. Reuse the existing observable store wiring (just rename `TaskGroup` → `TodoStore`).
+- The "real" process tools (`Monitor`, `task_output`, `task_stop`) come back in a future phase tied to `Bash run_in_background`.
+
+### Phase 6 — Profile manager + `/profile` switch + cross-persona delegation
+
+This is the **payoff phase** for everything in Phases 0–2: evva, nono, noen become first-class swappable personas, and `evva → nono` delegation works.
+
+- `/profile` slash command + TUI picker (lists every agent in the registry with `as: [main, ...]`).
+- Profile switch resets the session — provider-locked state (Anthropic `ThinkingSignature`, DeepSeek `reasoning_content`) can't carry across personas, and the system prompt is fully different anyway.
+- The Agent tool's `subagent_type` enum becomes the union of every agent with `as: [subagent, ...]` — including personas marked `as: [main, subagent]`. That union is how `evva` ends up able to spawn `nono` as a subagent.
+- The "subagents cannot spawn subagents" invariant stays in place.
+
+### Phase 7 — Plan mode (EnterPlanMode / ExitPlanMode)
+
+Bundled with Phase 3. Plan mode is `permission_mode: plan` plus a `plan_file` workflow, not a freestanding feature.
+
+- Port `ref/src/tools/EnterPlanModeTool/prompt.ts` + `ExitPlanModeTool/prompt.ts`.
+- Implement the Plan agent profile — read-only tools only, plan-file output. The skeleton already exists at `internal/agent/profiles.go`.
+- Wire `ExitPlanMode` to restore the previous permission mode (`default` or whatever was active before).
+
+### Phase 8 — AskUserQuestion
+
+UI-heavy port. The tool surface is small; the TUI does most of the work.
+
+- Port `ref/src/tools/AskUserQuestionTool/prompt.ts`.
+- TUI: question/answer overlay with single-select, multi-select, and side-by-side preview support (mockups, code snippets, diagrams).
+- Wire the answers + annotations back into the tool result envelope.
+
+### Phase 9 — User-profile background agent
+
+The agent that maintains `<EVVA_HOME>/USER_PROFILE.md`.
+
+Design points:
+
+- **Trigger** — end-of-session by default. `/profile-update` slash command for manual refresh.
+- **Tools** — `read` on session log + `USER_PROFILE.md`; `write` on `USER_PROFILE.md` only. No shell, no web, no subagent spawning.
+- **Output shape** — fixed sections (`## Preferences`, `## Working style`, `## Recurring topics`) so updates merge cleanly. Free-form rewrites drift and become useless within a few sessions.
+- **Opt-out** — enabled by default; one-line notice on first session; `/config` toggles it off.
+
+### Phase 10 — Worktree tools (EnterWorktree / ExitWorktree)
+
+Niche. Ship after the higher-leverage phases.
+
+- Port `ref/src/tools/EnterWorktreeTool/prompt.ts` + `ExitWorktreeTool/prompt.ts`.
+- Implement `git worktree add / remove` plumbing.
+- Wire AgentTool's `isolation: "worktree"` parameter to the same code path.
+
+### Phase 11 — MCP support + bundled skills (v2 tier)
+
+Closes the gap with Claude Code's plugin/skill ecosystem.
+
+- MCP server config + discovery; dynamic tool registration as deferred tools (so `ToolSearch` picks them up).
+- Port `ListMcpResources` / `ReadMcpResource`.
+- Bundle a small set of skills inspired by `ref/src/skills/bundled/`: `/commit`, `/review`, `/security-review`, `/simplify`.
+
+---
+
+## Out of scope (v3+)
+
+These deliberately don't appear in the 0–11 roadmap. Listed so contributors don't propose them as Phase additions.
+
+- **Teams / SendMessage** — Claude Code's multi-agent runtime depends on a bridge layer (UDS sockets, remote control, JWT, cross-machine session forwarding). Premature for evva v1; revisit when there's an actual second agent process to talk to.
+- **Process tools (`Monitor`, `task_output`, `task_stop`)** — return as a dedicated phase tied to `Bash run_in_background`. Today no one is asking for it.
+- **MCP integrations** (Atlassian, Figma, IDE diagnostics) — out of v1 entirely. The MCP framework support (Phase 11) is enough to unblock community plugins; bundled vendor integrations follow once there's demand.
+
+---
+
+## Project conventions
+
+- All source under `internal/` is private. Public extension points live in `pkg/`.
+- One package per tool family (`fs`, `shell`, `meta`, etc.). A new tool either goes in an existing family or starts a new family package.
+- One package per LLM provider in `internal/llm/`. The `llm.Client` interface is the only public seam.
+- Tests live next to the code they cover (`*_test.go`). No parallel `tests/` tree.
+- No comments that restate the code. Only comment WHY when the WHY is non-obvious.
+- Port tool descriptions from `ref/src/tools/*/prompt.ts` verbatim when reasonable. Diverge only with a clear reason.
+
+---
 
 ## Project structure
 
@@ -128,80 +208,30 @@ evva/
 │   │   └── sysprompt/         # system prompt builder
 │   ├── constant/              # provider / model / status enums
 │   ├── llm/                   # llm.Client interface + shared params
-│   │   ├── claude/  deepseek/  ollama/ .../
+│   │   ├── claude/  deepseek/  ollama/  ...
 │   ├── llmfactory/            # provider factory keyed by constant
 │   ├── logger/                # structured slog wrapper + pretty fmt
 │   ├── observable/            # pub/sub framework for stores
 │   ├── session/               # conversation history + cumulative usage
 │   ├── tools/                 # tool interface (Name/Schema/Execute)
 │   │   ├── cron/  dev/  fs/  meta/  mode/  monitor/  notebook/
-│   │   ├── shell/ task/ ux/   web/
+│   │   ├── shell/  skill/  task/  util/  ux/  web/
 │   ├── toolset/               # tool catalog + ToolState registry
 │   └── ui/                    # UI plugin contract
-│       ├── bubbletea/         # reference TUI implementation - prototype
-│       ├── bubbletea_v2/      # reference TUI implementation v2 - refactor v1
-│       └── ...                # user customized TUI implementation (customized layout style)
+│       ├── bubbletea/         # reference TUI implementation — prototype
+│       ├── bubbletea_v2/      # reference TUI implementation v2 — refactor v1
+│       └── ...                # downstream-customized layouts
+├── ref/src/                   # Claude Code reference source (read-only)
 ├── log/                       # per-agent runtime logs (gitignored)
-├── pkg/common/                # small shared utilities (UUID, ...)
+├── pkg/common/                # small shared utilities
 └── scripts/                   # demo / dev scripts
 ```
 
 Key boundaries:
+
 - `agent` knows about `event.Sink`, never about a concrete UI.
 - `tools/*` packages produce `tools.Result` (text + opaque `Metadata`); the UI type-asserts on `Metadata` to render structured payloads.
 - `observable` has no dependencies on agent or UI.
-- `ui` defines two narrow interfaces; implementations live under it.
+- `ui` defines narrow interfaces; implementations live under it.
 
-<br>
-
----
-
-<br>
-
-## Dev Planing
-
-There are full claude-source code put in `evva/ref/src`, refer to claude-code source code and implement evva new feature. also we need using tag to improve the system prompt and workflow prompt.
-
-* [ ] Phase-1: Basic fs tools + GlobTool + GrepTool copy
-  * Based on claude-code FileReadTool, FileWriteTool, FileEditTool, revamp evva read, write, edit tool. copy to golang including same tool desc and schema.
-  * Tui render of write, edit using the same layout as claude-code
-
-* [ ] Phase-2: ToolSearchTool copy
-  * Based on claude-code ToolSearchTool, revamp evva ToolSearch, evva are not complete right now, based on claude-code, put same tools we have into deferred.
-
-* [ ] Phase-3: AgentTool copy
-  * Based on claude-code AgentTool, revamp evva AgentTool
-  * Redesign Agent: in the future, the evva agent should be able support extend by other project, 
-  * Any project extend agent can share Evva toolPackage + customized toolPackage
-
-* [ ] Phase-4: System/Tool Prompt copy
-  * Learn from Claude Code Prompt system design, copy the claude code design to evva.
-  * update evva system design following claude code. 
-
-* [ ] Phase-5: TodoWrite tool copy
-  * Based on claude-code TodoWriteTool, create same tool for evva. and integrate into evva.
-  * Tui render should discuss with developers.
-
-* [ ] Phase-6: Task Tools copy
-  * Based on claude-code TaskTools(Create, Get, List, Output, Stop, Update), revamp evva task tool. copy to golang including same tool desc and schema.
-  * Revamp TaskGroup to fit new TaskTools 
-
-* [ ] Phase-7: Tool use Permission mechanism copy
-  * Based on claude-code Tool use Permission mechanism design it for evva, and create a mode swith, safe mode (enable tool use permission check), auto mode (disable tool use permission check)
-
-* [ ] Phase-8: Agent Profile switch
-  * Design an agent profile switch feature, different tool list, different system prompt, different harness. user can switch profile before session start.
-  * system level agent profile (Explore, General) are now allow to switch by user
-  * need a ProfileManager to manage all profile.
-
-* [ ] Phase-9: TeamTool SendMessageTool copy
-
-* [ ] Phase-10: EnterWorktreeTool +ExitWorktreeTool
-
-* [ ] Phase-10: AskUserQuestionTool copy
-
-* [ ] Phase-11: EnterPlanModeTool + ExitPlanMode copy
-
-... in future
-
-## Claude Dev Log
+User-facing documentation (install, TUI keybindings, config file shape, log paths) lives in `README.md`. This file is for project vision and the development roadmap.
