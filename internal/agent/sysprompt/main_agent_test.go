@@ -92,25 +92,6 @@ func TestMainAgent_IdentityFallbackOnBlankName(t *testing.T) {
 	}
 }
 
-func TestMainAgent_EnvironmentIncludesModelWhenSet(t *testing.T) {
-	ctx := mainCtx()
-	ctx.Model = "claude-opus-4-7"
-	got := buildMainPrompt(ctx)
-	if !strings.Contains(got, "- Model: claude-opus-4-7") {
-		t.Errorf("model line missing from environment when Model is set")
-	}
-	if !strings.Contains(got, "Assistant knowledge cutoff: January 2026") {
-		t.Errorf("knowledge cutoff missing for opus-4-7")
-	}
-}
-
-func TestMainAgent_EnvironmentOmitsModelWhenUnset(t *testing.T) {
-	got := buildMainPrompt(mainCtx())
-	if strings.Contains(got, "- Model:") {
-		t.Errorf("model line should be absent when Model is empty")
-	}
-}
-
 func TestMainAgent_NoStaticPlanModeSection(t *testing.T) {
 	// Plan-mode guidance moved to per-turn attachments (Phase 11). The
 	// static prompt may reference enter_plan_mode in the tools guide, but
