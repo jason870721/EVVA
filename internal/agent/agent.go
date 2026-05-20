@@ -570,9 +570,22 @@ func (a *Agent) PlanModeState() *permission.PlanModeState { return a.planModeSta
 
 // CyclePermissionMode advances the mode in Shift+Tab order and returns
 // the new mode name. Implements ui.Controller.
+//
+// Unlike SetPermissionMode, this method does NOT emit a KindModeChanged
+// event. It is called from the TUI's Update goroutine (via the Shift+Tab
+// handler), and emitting would call tea.Program.Send() back into the same
+// event loop — a guaranteed deadlock since bubbletea's p.msgs channel is
+// unbuffered. The TUI already updates its status bar directly, so the
+// event is redundant on this path.
 func (a *Agent) CyclePermissionMode() string {
 	next := a.PermissionMode().Next()
-	a.SetPermissionMode(next)
+	if !next.Valid() || next == a.PermissionMode() {
+		return string(a.PermissionMode())
+	}
+	prev := a.PermissionMode()
+	a.permissionMode.Store(next)
+	a.planModeState.Transition(prev, next)
+	a.logger.Info("agent: permission mode cycled", "mode", string(next))
 	return string(next)
 }
 
