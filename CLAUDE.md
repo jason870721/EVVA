@@ -200,7 +200,7 @@ Niche. Ship after the higher-leverage phases.
 - Implement `git worktree add / remove` plumbing.
 - Wire AgentTool's `isolation: "worktree"` parameter to the same code path.
 
-### Phase  11 - Refine the Agent System Prompt
+### Phase  11 - Refine the Agent System Prompt  ✅️
 
 Currently evva is kind of stupid like strange to all the tools the feature we built so far. 
 
@@ -227,7 +227,7 @@ Those are the main reason why I think plan mode is important to refine.
   - `ultra`
 - each llm implement can convert the effort to the provider's API request params. if provider only support 2 class of effort, map `low` → "fast" and `medium`/`high`/`ultra` → "best" (or equivalent).
 
-### Phase 13 - BIG Revamp EVVA to support other open source project
+### Phase 13 - BIG Revamp EVVA to support other open source project  ✅️
 
 Currently, evva is just a ReAct Agent with tui, all code stay in internal mostly.
 
@@ -250,7 +250,7 @@ Write them down below:
 
 Ship order: **13b → 13a → 13c → 13d → 13e**. 13b is small and focused (LLM registry) so we prove the extension pattern early. 13a (config DI + `AppHome` rename) follows because 13c (public tool families) blocks on it.
 
-#### Phase 13b — Public LLM provider registry
+#### Phase 13b — Public LLM provider registry  ✅️
 
 Mirror the tool registry pattern for LLM clients. Built-in providers move public per the user's "max reuse" choice.
 
@@ -261,7 +261,7 @@ Mirror the tool registry pattern for LLM clients. Built-in providers move public
 - Replace `internal/llmfactory/factory.go:Of`'s hardcoded switch with `pkg/llm.DefaultRegistry().Build(...)`. Keep `Of`'s signature unchanged so 13a can do the config DI work cleanly.
 - Downstream extension: `pkg/llm.DefaultRegistry().Register("gemini", geminiFactory)` before `agent.New`.
 
-#### Phase 13a — Decouple `AppConfig` from the singleton, rename `EvvaHome` → `AppHome`
+#### Phase 13a — Decouple `AppConfig` from the singleton, rename `EvvaHome` → `AppHome`  ✅️
 
 Every `configs.Get()` call becomes a value passed by reference. The singleton goes away (or becomes a thin shim). `EvvaHome*` fields rename to `AppHome*` and accept a constructor argument so downstream apps can choose their own home dir.
 
@@ -272,7 +272,7 @@ Every `configs.Get()` call becomes a value passed by reference. The singleton go
 - Tools that need config reach it through `*toolset.ToolState`, which gains a `Config()` accessor (same late-bound pattern as the skill registry / subagent spawner).
 - Delete `internal/llmfactory/` once the registry is callable directly from `internal/agent/`.
 
-#### Phase 13c — Public tool + toolset surface (tool families go public too)
+#### Phase 13c — Public tool + toolset surface (tool families go public too)  ✅️
 
 Tool family packages move public per the user's "max reuse" choice.
 
@@ -282,7 +282,7 @@ Tool family packages move public per the user's "max reuse" choice.
 - New `pkg/tools.State` interface — the narrow surface a custom tool factory consumes (`Logger()`, `Config()`, `Workdir()`). `internal/toolset/ToolState` satisfies it.
 - New `WithCustomTool(name, factory)` agent option.
 
-#### Phase 13d — Public agent + UI surface
+#### Phase 13d — Public agent + UI surface  ✅️
 
 - Move `internal/agent/event/` → `pkg/event/`. Every payload, Kind constant, Sink, Multi, BubbleUp, Discard, SinkFunc.
 - Move `internal/observable/` → `pkg/observable/`.
@@ -290,7 +290,7 @@ Tool family packages move public per the user's "max reuse" choice.
 - Expand `pkg/agent`: public `Profile` type with `NewProfile(...)` constructor; new options `WithSink`, `WithLLMRegistry`, `WithToolRegistry`, `WithConfig`, `WithPermissionMode`.
 - The agent loop and event emission internals stay in `internal/agent/`. Downstream apps cannot change `Kind` values or add new ones — this is the Phase 13 invariant.
 
-#### Phase 13e — Rewire reference TUI + downstream example
+#### Phase 13e — Rewire reference TUI + downstream example  ✅️
 
 - Rewrite `cmd/evva/main.go` to use only `pkg/` for the agent construction path.
 - `internal/ui/bubbletea_v2/` becomes a downstream-style consumer: imports `pkg/event`, `pkg/ui`, `pkg/agent` only (besides its own components).
