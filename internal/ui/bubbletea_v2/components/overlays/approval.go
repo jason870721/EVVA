@@ -256,6 +256,15 @@ func (a *Approval) View(width int, th *theme.Theme) string {
 	b.WriteString(th.StatusValue.Render(a.req.ToolName))
 	b.WriteByte('\n')
 
+	// Model-supplied per-call description. Today only Bash carries this
+	// in its input schema ({"description": "..."} alongside command). Any
+	// future tool whose input has a top-level `description` string gets
+	// the same line for free — extractInputDescription is tool-agnostic.
+	if a.req.InputDescription != "" {
+		b.WriteString(th.DimText.Render(a.req.InputDescription))
+		b.WriteByte('\n')
+	}
+
 	b.WriteString(th.StatusKey.Render("mode: "))
 	b.WriteString(th.StatusValue.Render(a.req.Mode))
 	if a.req.RiskHint != "" {

@@ -39,19 +39,22 @@ type Broker interface {
 // so the approval overlay can render the plan inline. Other tools leave
 // it empty; the overlay's plan branch keys off the non-empty check.
 //
-// We deliberately do NOT carry the tool's LLM-facing Description here:
-// that text is written for the model (when to use, when not, examples)
-// and is the wrong shape for a user-facing approval prompt. The overlay
-// renders ToolName + a one-line summary of ToolInput instead.
+// InputDescription carries the model-supplied `description` field from
+// the tool input (Bash today; any future tool whose input schema includes
+// a top-level `description` string gets the same treatment). It explains
+// what THIS call is about to do — not what the tool does in general — so
+// it's the right size for a user-facing approval prompt. Empty when the
+// input has no such field; the overlay skips the line.
 type ApprovalRequest struct {
-	ID          string // empty on input — Broker.Request assigns one
-	AgentID     string // who's asking (root or subagent ID)
-	ToolName    string
-	ToolInput   []byte // raw JSON; UI summarises to ~200 chars
-	Mode        Mode
-	Reason      string // from Decide() — why we're asking
-	Hint        Hint   // pre-computed classification (Bash only today)
-	PlanContent string // ExitPlanMode-only; markdown plan body
+	ID               string // empty on input — Broker.Request assigns one
+	AgentID          string // who's asking (root or subagent ID)
+	ToolName         string
+	ToolInput        []byte // raw JSON; UI summarises to ~200 chars
+	InputDescription string // model-supplied `description` field from ToolInput; "" when absent
+	Mode             Mode
+	Reason           string // from Decide() — why we're asking
+	Hint             Hint   // pre-computed classification (Bash only today)
+	PlanContent      string // ExitPlanMode-only; markdown plan body
 }
 
 // NewBroker returns a Broker backed by an in-memory request map. There's

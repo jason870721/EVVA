@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -405,12 +406,13 @@ func (a *Agent) permissionGate(ctx context.Context, call *tools.Call) (bool, *ll
 		}
 		a.logger.Info("permission.ask", "tool", call.Name, "mode", string(mode), "reason", d.Reason)
 		req := permission.ApprovalRequest{
-			AgentID:   a.ID,
-			ToolName:  call.Name,
-			ToolInput: call.Input,
-			Mode:      mode,
-			Reason:    d.Reason,
-			Hint:      hint,
+			AgentID:          a.ID,
+			ToolName:         call.Name,
+			ToolInput:        call.Input,
+			InputDescription: extractInputDescription(call.Input),
+			Mode:             mode,
+			Reason:           d.Reason,
+			Hint:             hint,
 		}
 		resp, err := a.permissionBroker.Request(ctx, req)
 		if err != nil {
@@ -522,4 +524,23 @@ func (a *Agent) getParentSpawnGroup() *meta.SpawnGroup {
 		return nil
 	}
 	return a.Parent.ToolState().AgentGroup()
+}
+
+// extractInputDescription pulls a top-level `description` string out of a
+// tool call's raw JSON input. Bash's input schema includes such a field
+// (the model fills it with "what this command does in active voice");
+// future tools that adopt the same convention get the same UX without a
+// per-tool switch. Returns "" when the input isn't a JSON object, has no
+// `description` key, or the value isn't a string.
+func extractInputDescription(input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var probe struct {
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(input, &probe); err != nil {
+		return ""
+	}
+	return probe.Description
 }

@@ -192,14 +192,15 @@ type ToolUseResultPayload struct {
 // PlanContent is non-empty only for ExitPlanMode — carries the markdown
 // plan body so the approval overlay can render it inline.
 type ApprovalNeededPayload struct {
-	RequestID   string
-	ToolName    string
-	ToolInput   json.RawMessage
-	Mode        string
-	Reason      string
-	RiskHint    string
-	Matched     string
-	PlanContent string
+	RequestID        string
+	ToolName         string
+	ToolInput        json.RawMessage
+	InputDescription string // model-supplied `description` field from ToolInput; "" when the tool's input has no such field
+	Mode             string
+	Reason           string
+	RiskHint         string
+	Matched          string
+	PlanContent      string
 }
 
 // QuestionNeededPayload is the wire shape of a pending question prompt.
