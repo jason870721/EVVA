@@ -17,13 +17,23 @@ The architecture is small on purpose — adding a new LLM provider, panel, or UI
 
 ## Install
 
+Requires Go 1.25+. Currently **macOS and Linux only** — Windows support is not yet available.
+
+### Quick install (recommended)
+
+```bash
+go install github.com/johnny1110/evva/cmd/evva@latest
+```
+
+The binary lands in `$GOBIN` (or `$GOPATH/bin`). Make sure it's on your `PATH`.
+
+### Build from source
+
 ```bash
 git clone https://github.com/johnny1110/evva
 cd evva
 make install
 ```
-
-Default install target is `$GOBIN` (or `$GOPATH/bin` when `GOBIN` is unset) — usually already on a Go developer's `PATH`. The `make install` output tells you whether to add it.
 
 Override the location if you want it elsewhere:
 
@@ -32,17 +42,36 @@ sudo make install PREFIX=/usr/local/bin     # system-wide
 make install PREFIX=$HOME/.local/bin        # user-local
 ```
 
-Verify:
+### Verify
 
 ```bash
-which evva
-evva --help-ish    # any flag triggers the usage line
+evva -version
 ```
 
 Uninstall removes only the binary; your `~/.evva/` config is preserved:
 
 ```bash
 make uninstall
+```
+
+---
+
+## Update
+
+To update evva to the latest version without Go:
+
+```bash
+evva update
+```
+
+This checks GitHub Releases for a newer version, downloads the pre-built binary for your OS/arch, and replaces the current one atomically. No Go toolchain required.
+
+You can also check for updates from inside the TUI with `/update`.
+
+To see your current version:
+
+```bash
+evva -version
 ```
 
 ---
@@ -142,6 +171,8 @@ USER_PROFILE=user_profile.md
 
 ```bash
 evva                                # interactive TUI (when stdout is a TTY)
+evva -version                       # print version, commit, and build date
+evva update                         # self-update from GitHub Releases (no Go required)
 evva -temp 0.7                      # sampling temperature (default unset)
 evva -max-tokens 2048               # per-completion output cap (overrides YAML)
 evva -max-iters 40                  # loop iteration cap (overrides YAML)
@@ -242,6 +273,7 @@ Key boundaries:
 - **Session persistence**: `/resume` to reload a session snapshot.
 
 ### Known limitations
+- Windows is not yet supported. macOS and Linux only.
 - Sub-agent hierarchy is exactly two layers (no nested spawning).
 - Token counts depend on provider reporting — Ollama only reports prompt / eval, not cache or reasoning splits.
 - The TUI transcript grows unbounded in a long session; compaction is on the list above.
