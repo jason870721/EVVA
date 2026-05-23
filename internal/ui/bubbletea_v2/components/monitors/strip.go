@@ -3,9 +3,8 @@
 // can glance at "background tasks" vs "streaming monitors" without
 // scanning a mixed list.
 //
-// Source of truth is *toolset.ToolState.DaemonState filtered by
-// KindMonitor. The strip subscribes implicitly via the agent's
-// KindStoreUpdate bridge.
+// Source of truth is the *daemon.DaemonState filtered by KindMonitor.
+// The strip subscribes implicitly via the agent's KindStoreUpdate bridge.
 package monitors
 
 import (
@@ -14,7 +13,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/johnny1110/evva/internal/toolset"
 	"github.com/johnny1110/evva/internal/ui/bubbletea_v2/theme"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
 )
@@ -23,11 +21,11 @@ const monChipMaxLabel = 16
 
 // Render returns the chip strip as a (possibly multi-line) string. frame
 // is the spinner frame index used to animate running monitors.
-func Render(ts *toolset.ToolState, width int, th *theme.Theme, frame int) string {
-	if ts == nil || !ts.HasDaemonState() {
+func Render(ds *daemon.DaemonState, width int, th *theme.Theme, frame int) string {
+	if ds == nil {
 		return ""
 	}
-	rows := ts.DaemonState().SnapshotByKind(daemon.KindMonitor)
+	rows := ds.SnapshotByKind(daemon.KindMonitor)
 	if len(rows) == 0 {
 		return ""
 	}

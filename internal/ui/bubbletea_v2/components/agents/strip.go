@@ -9,9 +9,8 @@
 // show their static glyph. Async subagents get a small superscript "ᵃ"
 // so the user can see fire-and-forget vs. blocking.
 //
-// Source of truth is *toolset.ToolState.DaemonState filtered by
-// KindLocalAgent. The strip subscribes implicitly via the agent's
-// KindStoreUpdate bridge.
+// Source of truth is the *daemon.DaemonState filtered by KindLocalAgent.
+// The strip subscribes implicitly via the agent's KindStoreUpdate bridge.
 package agents
 
 import (
@@ -19,7 +18,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/johnny1110/evva/internal/toolset"
 	"github.com/johnny1110/evva/internal/ui/bubbletea_v2/theme"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
 )
@@ -35,11 +33,11 @@ const agentChipMaxName = 12
 //
 // frame is the spinner index from the App's State; animated chips pick
 // their glyph from theme.SpinnerFrame(frame).
-func Render(ts *toolset.ToolState, width int, th *theme.Theme, frame int) string {
-	if ts == nil || !ts.HasDaemonState() {
+func Render(ds *daemon.DaemonState, width int, th *theme.Theme, frame int) string {
+	if ds == nil {
 		return ""
 	}
-	rows := ts.DaemonState().SnapshotByKind(daemon.KindLocalAgent)
+	rows := ds.SnapshotByKind(daemon.KindLocalAgent)
 	if len(rows) == 0 {
 		return ""
 	}

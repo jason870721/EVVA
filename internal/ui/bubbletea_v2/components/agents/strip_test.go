@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/johnny1110/evva/internal/toolset"
 	"github.com/johnny1110/evva/internal/ui/bubbletea_v2/theme"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
 )
@@ -49,16 +48,15 @@ func (f *agentFixture) Snapshot() daemon.DaemonSnapshot { return f.snap }
 func (f *agentFixture) Kill(_ context.Context) error    { return nil }
 func (f *agentFixture) Output() string                  { return "" }
 
-// newTSWithAgents materialises the DaemonState and seeds it with
+// newStateWithAgents materialises a DaemonState and seeds it with
 // local_agent snapshots so Render can pull them via SnapshotByKind.
-func newTSWithAgents(t *testing.T, snaps []daemon.DaemonSnapshot) *toolset.ToolState {
+func newStateWithAgents(t *testing.T, snaps []daemon.DaemonSnapshot) *daemon.DaemonState {
 	t.Helper()
-	ts := toolset.NewToolState()
-	state := ts.DaemonState()
+	state := daemon.NewState(func() {})
 	for _, s := range snaps {
 		state.Register(&agentFixture{snap: s})
 	}
-	return ts
+	return state
 }
 
 // agentSnap builds a local_agent DaemonSnapshot fixture with the given
@@ -79,18 +77,17 @@ func agentSnap(id, name, phase string, status daemon.DaemonStatus, async bool) d
 }
 
 func TestRenderEmpty(t *testing.T) {
-	ts := toolset.NewToolState()
-	// HasDaemonState is false until DaemonState() is materialised.
-	if got := Render(ts, 80, theme.Default(), 0); got != "" {
-		t.Errorf("empty state should render empty, got %q", got)
+	// The App passes a nil DaemonState when no daemon has registered yet.
+	if got := Render(nil, 80, theme.Default(), 0); got != "" {
+		t.Errorf("nil state should render empty, got %q", got)
 	}
 }
 
 func TestRenderSingleChip(t *testing.T) {
-	ts := newTSWithAgents(t, []daemon.DaemonSnapshot{
+	state := newStateWithAgents(t, []daemon.DaemonSnapshot{
 		agentSnap("ag-1", "explorer", "thinking", daemon.StatusRunning, false),
 	})
-	out := Render(ts, 80, theme.Default(), 0)
+	out := Render(state, 80, theme.Default(), 0)
 	plain := stripANSI(out)
 	if !strings.Contains(plain, "explorer") {
 		t.Errorf("chip should include agent name: %q", plain)
@@ -101,10 +98,10 @@ func TestRenderSingleChip(t *testing.T) {
 }
 
 func TestRenderAsyncMarker(t *testing.T) {
-	ts := newTSWithAgents(t, []daemon.DaemonSnapshot{
+	state := newStateWithAgents(t, []daemon.DaemonSnapshot{
 		agentSnap("ag-1", "bg-job", "executing", daemon.StatusRunning, true),
 	})
-	out := stripANSI(Render(ts, 80, theme.Default(), 0))
+	out := stripANSI(Render(state, 80, theme.Default(), 0))
 	if !strings.Contains(out, "ᵃ") {
 		t.Errorf("async chip should include 'ᵃ' marker: %q", out)
 	}
@@ -112,10 +109,10 @@ func TestRenderAsyncMarker(t *testing.T) {
 
 func TestRenderTruncatesLongName(t *testing.T) {
 	long := strings.Repeat("a", 50)
-	ts := newTSWithAgents(t, []daemon.DaemonSnapshot{
+	state := newStateWithAgents(t, []daemon.DaemonSnapshot{
 		agentSnap("ag-1", long, "thinking", daemon.StatusRunning, false),
 	})
-	out := stripANSI(Render(ts, 80, theme.Default(), 0))
+	out := stripANSI(Render(state, 80, theme.Default(), 0))
 	if strings.Contains(out, long) {
 		t.Errorf("long name should be truncated, got: %q", out)
 	}
@@ -139,19 +136,19 @@ func TestRenderWrapsToMultipleLines(t *testing.T) {
 	for i := range snaps {
 		snaps[i].StartedAt = now.Add(time.Duration(i) * time.Millisecond)
 	}
-	ts := newTSWithAgents(t, snaps)
-	out := Render(ts, 30, theme.Default(), 0)
+	state := newStateWithAgents(t, snaps)
+	out := Render(state, 30, theme.Default(), 0)
 	if strings.Count(out, "\n") < 1 {
 		t.Errorf("expected at least one line wrap at width 30, got:\n%q", out)
 	}
 }
 
 func TestRenderSpinnerFrameAdvances(t *testing.T) {
-	ts := newTSWithAgents(t, []daemon.DaemonSnapshot{
+	state := newStateWithAgents(t, []daemon.DaemonSnapshot{
 		agentSnap("ag-1", "spin", "thinking", daemon.StatusRunning, false), // active → animates
 	})
-	frame0 := Render(ts, 80, theme.Default(), 0)
-	frame3 := Render(ts, 80, theme.Default(), 3)
+	frame0 := Render(state, 80, theme.Default(), 0)
+	frame3 := Render(state, 80, theme.Default(), 3)
 	if frame0 == frame3 {
 		t.Errorf("frame change should alter animated chip: frame0=%q frame3=%q", frame0, frame3)
 	}

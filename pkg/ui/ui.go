@@ -20,10 +20,11 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/pkg/constant"
-	"github.com/johnny1110/evva/internal/session"
-	"github.com/johnny1110/evva/internal/toolset"
+	"github.com/johnny1110/evva/pkg/event"
+	"github.com/johnny1110/evva/pkg/llm"
+	"github.com/johnny1110/evva/pkg/tools/daemon"
+	"github.com/johnny1110/evva/pkg/tools/todo"
 )
 
 // UI is the contract a TUI / GUI / web frontend implementation satisfies.
@@ -59,10 +60,10 @@ type Skill struct {
 // Controller is the narrow API a UI uses to send commands back to the
 // agent. Implemented by *agent.Agent.
 //
-// The interface is intentionally minimal. State the UI wants to render
-// (tasks, subagents, usage) lives behind Session and ToolState — the UI
-// reads those via the typed accessors on each side, not through bespoke
-// Controller methods.
+// The interface is intentionally minimal. Render state lives behind
+// public typed accessors — Messages / Usage for the transcript and
+// status bar, TodoStore / DaemonState for the panels — so a UI in any
+// module can read it without importing evva internals.
 type Controller interface {
 	// Run drives the agent for a single user turn. The UI typically
 	// launches this in a goroutine so its main loop stays responsive,
@@ -73,16 +74,34 @@ type Controller interface {
 	// user message.
 	Continue(ctx context.Context) (string, error)
 
-	// Session exposes the conversation history. The UI reads cumulative
-	// usage from Session().Usage and replays Session().Messages on
-	// resume.
-	Session() *session.Session
+	// Messages returns the live conversation transcript. The UI replays
+	// these to rebuild its visible scrollback on resume.
+	Messages() []llm.Message
 
-	// ToolState exposes the shared backing-store registry. UIs that want
-	// to render todo or subagent panels read state through
-	// ToolState().TodoStore() / ToolState().AgentGroup(), and
-	// subscribe to observable.Change events via ToolState().Subscribe().
-	ToolState() *toolset.ToolState
+	// Usage returns the cumulative token usage for the session — the
+	// status bar's running total.
+	Usage() llm.Usage
+
+	// LastTurnInputTokens returns the input-token count of the most recent
+	// turn: the "how full is the prompt right now" gauge the context meter
+	// reads. Prefer this over Usage().Total for context-pressure display.
+	LastTurnInputTokens() int
+
+	// TodoStore exposes the agent's todo backing store so the UI can
+	// render the todo panel (List) and clear it on auto-fold (Clear).
+	// Never nil.
+	TodoStore() *todo.TodoStore
+
+	// DaemonState exposes the unified daemon store (subagents, background
+	// bash tasks, monitors) so the UI can render the chip strips via
+	// SnapshotByKind. Returns nil until the first daemon is registered —
+	// callers must nil-check.
+	DaemonState() *daemon.DaemonState
+
+	// EnqueueUserPrompt hands the agent a prompt the user typed mid-run.
+	// The agent drains the queue at the next iteration boundary instead of
+	// starting a second concurrent Run.
+	EnqueueUserPrompt(prompt string)
 
 	// Logger exposes the agent's structured logger so the UI can emit
 	// records that share its context.

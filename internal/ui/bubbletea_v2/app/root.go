@@ -316,8 +316,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// scroll up to see the prior conversation and type a new prompt
 		// to continue; the LLM already has the full history in its
 		// session.Messages.
-		sess := a.controller.Session()
-		a.transcript.LoadFromMessages(sess.GetMessages())
+		a.transcript.LoadFromMessages(a.controller.Messages())
 		a.refreshBanner()
 		// ResumeSnapshot overwrote Agent.ID with the loaded session-id —
 		// refresh every status pill that derives from the agent so the
@@ -326,8 +325,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.status.SetAgentName(strings.ToUpper(a.controller.ProfileName()))
 		a.status.SetModel(a.controller.Model())
 		a.status.SetEffort(a.controller.Effort())
-		a.status.SetUsage(sess.Usage)
-		a.status.SetContext(sess.LastTurnInputTokens(), status.ContextLimitFor(a.controller.Model()))
+		a.status.SetUsage(a.controller.Usage())
+		a.status.SetContext(a.controller.LastTurnInputTokens(), status.ContextLimitFor(a.controller.Model()))
 		a.state.SetHint("resumed session " + m.ID + " · type a prompt to continue")
 		a.view.MarkDirty()
 		a.relayout()
@@ -439,7 +438,7 @@ func (a *App) handleAgentEvent(e event.Event) (tea.Model, tea.Cmd) {
 	}
 	if a.controller != nil {
 		a.status.SetContext(
-			a.controller.Session().LastTurnInputTokens(),
+			a.controller.LastTurnInputTokens(),
 			status.ContextLimitFor(a.controller.Model()),
 		)
 	}
@@ -447,14 +446,14 @@ func (a *App) handleAgentEvent(e event.Event) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	if e.Kind == event.KindStoreUpdate && e.StoreUpdate != nil &&
 		e.StoreUpdate.Domain == todo.Domain && a.controller != nil {
-		if todos.AllCompleted(a.controller.ToolState()) {
+		if todos.AllCompleted(a.controller.TodoStore()) {
 			width := a.transcriptWidth()
-			snap := todos.RenderCompleteSnapshot(a.controller.ToolState(), width, a.theme)
+			snap := todos.RenderCompleteSnapshot(a.controller.TodoStore(), width, a.theme)
 			a.transcript.AppendSynthetic(snap)
 			a.view.MarkDirty()
-			ts := a.controller.ToolState()
+			store := a.controller.TodoStore()
 			cmd = func() tea.Msg {
-				ts.TodoStore().Clear()
+				store.Clear()
 				return nil
 			}
 		}
@@ -486,16 +485,16 @@ func (a *App) relayout() {
 	}
 	used := 5 + 2 // input + hint+status
 	if a.controller != nil {
-		if panel := todos.Render(a.controller.ToolState(), a.transcriptWidth(), a.theme); panel != "" {
+		if panel := todos.Render(a.controller.TodoStore(), a.transcriptWidth(), a.theme); panel != "" {
 			used += strings.Count(panel, "\n") + 1
 		}
-		if strip := agents.Render(a.controller.ToolState(), a.transcriptWidth(), a.theme, a.state.Frame()); strip != "" {
+		if strip := agents.Render(a.controller.DaemonState(), a.transcriptWidth(), a.theme, a.state.Frame()); strip != "" {
 			used += strings.Count(strip, "\n") + 1
 		}
-		if strip := bgtasks.Render(a.controller.ToolState(), a.transcriptWidth(), a.theme, a.state.Frame()); strip != "" {
+		if strip := bgtasks.Render(a.controller.DaemonState(), a.transcriptWidth(), a.theme, a.state.Frame()); strip != "" {
 			used += strings.Count(strip, "\n") + 1
 		}
-		if strip := monitors.Render(a.controller.ToolState(), a.transcriptWidth(), a.theme, a.state.Frame()); strip != "" {
+		if strip := monitors.Render(a.controller.DaemonState(), a.transcriptWidth(), a.theme, a.state.Frame()); strip != "" {
 			used += strings.Count(strip, "\n") + 1
 		}
 	}
@@ -828,7 +827,7 @@ func (a *App) handleSubmit(m input.SubmitMsg) (tea.Model, tea.Cmd) {
 	if a.runCancel != nil {
 		a.transcript.AppendUserPrompt(m.ForView)
 		a.input.Reset()
-		a.controller.ToolState().UserPromptQueue().Enqueue(m.ForAgent)
+		a.controller.EnqueueUserPrompt(m.ForAgent)
 		a.state.SetHint("queued — will land at next iteration")
 		a.view.MarkDirty()
 		return a, nil
@@ -902,19 +901,19 @@ func (a *App) View() string {
 
 	width := a.transcriptWidth()
 	if a.controller != nil {
-		if panel := todos.Render(a.controller.ToolState(), width, a.theme); panel != "" {
+		if panel := todos.Render(a.controller.TodoStore(), width, a.theme); panel != "" {
 			b.WriteByte('\n')
 			b.WriteString(panel)
 		}
-		if strip := agents.Render(a.controller.ToolState(), width, a.theme, a.state.Frame()); strip != "" {
+		if strip := agents.Render(a.controller.DaemonState(), width, a.theme, a.state.Frame()); strip != "" {
 			b.WriteByte('\n')
 			b.WriteString(strip)
 		}
-		if strip := bgtasks.Render(a.controller.ToolState(), width, a.theme, a.state.Frame()); strip != "" {
+		if strip := bgtasks.Render(a.controller.DaemonState(), width, a.theme, a.state.Frame()); strip != "" {
 			b.WriteByte('\n')
 			b.WriteString(strip)
 		}
-		if strip := monitors.Render(a.controller.ToolState(), width, a.theme, a.state.Frame()); strip != "" {
+		if strip := monitors.Render(a.controller.DaemonState(), width, a.theme, a.state.Frame()); strip != "" {
 			b.WriteByte('\n')
 			b.WriteString(strip)
 		}

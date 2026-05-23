@@ -4,7 +4,7 @@
 // states. Returns "" when no daemons of kind local_bash are tracked so
 // the layout collapses the slot.
 //
-// Source of truth is *toolset.ToolState.DaemonState (the unified daemon
+// Source of truth is the *daemon.DaemonState (the unified daemon
 // catalog). The strip subscribes implicitly via the agent's
 // KindStoreUpdate bridge — the bubbletea host re-renders when any
 // daemon change arrives.
@@ -15,7 +15,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/johnny1110/evva/internal/toolset"
 	"github.com/johnny1110/evva/internal/ui/bubbletea_v2/theme"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
 )
@@ -26,11 +25,11 @@ const bgChipMaxLabel = 16
 
 // Render returns the chip strip as a (possibly multi-line) string. frame
 // is the spinner frame index used to animate running daemons.
-func Render(ts *toolset.ToolState, width int, th *theme.Theme, frame int) string {
-	if ts == nil || !ts.HasDaemonState() {
+func Render(ds *daemon.DaemonState, width int, th *theme.Theme, frame int) string {
+	if ds == nil {
 		return ""
 	}
-	rows := ts.DaemonState().SnapshotByKind(daemon.KindLocalBash)
+	rows := ds.SnapshotByKind(daemon.KindLocalBash)
 	if len(rows) == 0 {
 		return ""
 	}

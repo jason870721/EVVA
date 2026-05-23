@@ -13,20 +13,22 @@ import (
 	"github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/constant"
 
-	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/internal/agent/sysprompt"
-	"github.com/johnny1110/evva/pkg/llm"
 	"github.com/johnny1110/evva/internal/logger"
 	"github.com/johnny1110/evva/internal/memdir"
 	"github.com/johnny1110/evva/internal/permission"
 	"github.com/johnny1110/evva/internal/question"
 	"github.com/johnny1110/evva/internal/session"
 	"github.com/johnny1110/evva/internal/tools/mode"
-	pubtoolset "github.com/johnny1110/evva/pkg/toolset"
-	"github.com/johnny1110/evva/pkg/tools"
 	"github.com/johnny1110/evva/internal/toolset"
-	"github.com/johnny1110/evva/pkg/ui"
 	"github.com/johnny1110/evva/pkg/common"
+	"github.com/johnny1110/evva/pkg/event"
+	"github.com/johnny1110/evva/pkg/llm"
+	"github.com/johnny1110/evva/pkg/tools"
+	"github.com/johnny1110/evva/pkg/tools/daemon"
+	"github.com/johnny1110/evva/pkg/tools/todo"
+	pubtoolset "github.com/johnny1110/evva/pkg/toolset"
+	"github.com/johnny1110/evva/pkg/ui"
 )
 
 // Agent runs a chat loop against an llm.Client, configured by a Profile.
@@ -754,6 +756,43 @@ func (a *Agent) Model() string {
 // ToolState exposes the shared state container so the TUI / session-persist
 // layer can read tool state through typed accessors (e.g. TaskStore.List()).
 func (a *Agent) ToolState() *toolset.ToolState { return a.toolState }
+
+// --- ui.Controller read-models -------------------------------------------
+// These return public types so a UI in any module can render agent state
+// without importing evva internals — the session / toolset containers stay
+// private. They wrap the same data the concrete Session()/ToolState()
+// accessors expose above.
+
+// Messages returns the live conversation transcript.
+func (a *Agent) Messages() []llm.Message { return a.session.GetMessages() }
+
+// Usage returns the cumulative session token usage.
+func (a *Agent) Usage() llm.Usage { return a.session.Usage }
+
+// LastTurnInputTokens returns the most recent turn's input-token count —
+// the live prompt-size gauge the TUI context meter reads.
+func (a *Agent) LastTurnInputTokens() int { return a.session.LastTurnInputTokens() }
+
+// TodoStore exposes the todo backing store for the TUI's todo panel.
+func (a *Agent) TodoStore() *todo.TodoStore { return a.toolState.TodoStore() }
+
+// DaemonState exposes the unified daemon store (subagents, background bash,
+// monitors). Returns nil until the first daemon registers — mirrors the
+// HasDaemonState guard the strips relied on, so an empty session renders no
+// strips and allocates no store.
+func (a *Agent) DaemonState() *daemon.DaemonState {
+	if !a.toolState.HasDaemonState() {
+		return nil
+	}
+	return a.toolState.DaemonState()
+}
+
+// EnqueueUserPrompt hands the agent a prompt the user typed mid-run; the
+// loop drains it at the next iteration boundary instead of starting a
+// second concurrent Run.
+func (a *Agent) EnqueueUserPrompt(prompt string) {
+	a.toolState.UserPromptQueue().Enqueue(prompt)
+}
 
 // PermissionMode returns the agent's current permission stance. Safe to
 // call from any goroutine.

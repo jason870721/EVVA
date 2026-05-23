@@ -3,8 +3,8 @@
 // todo in the store finishes.
 //
 // Pure rendering — no tea.Model. The App passes the current
-// *toolset.ToolState to Render on every frame; the panel reads the
-// todo store and produces a styled multi-line string. Returns ""
+// *todo.TodoStore to Render on every frame; the panel reads the
+// store and produces a styled multi-line string. Returns ""
 // when there's nothing to show so the layout collapses the slot.
 package todos
 
@@ -14,9 +14,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/johnny1110/evva/pkg/tools/todo"
-	"github.com/johnny1110/evva/internal/toolset"
 	"github.com/johnny1110/evva/internal/ui/bubbletea_v2/theme"
+	"github.com/johnny1110/evva/pkg/tools/todo"
 )
 
 // Render returns the todo panel as a styled string. Empty when no todos
@@ -24,11 +23,7 @@ import (
 //
 // width caps row length; oversized contents are truncated with an
 // ellipsis. The header is a HUD-style scanline ("▰▰ TODOS ▰▰▰…").
-func Render(ts *toolset.ToolState, width int, th *theme.Theme) string {
-	if ts == nil {
-		return ""
-	}
-	store := ts.TodoStore()
+func Render(store *todo.TodoStore, width int, th *theme.Theme) string {
 	if store == nil {
 		return ""
 	}
@@ -53,11 +48,7 @@ func Render(ts *toolset.ToolState, width int, th *theme.Theme) string {
 //
 // Returns false on an empty store so a fresh store doesn't trigger a
 // phantom snapshot.
-func AllCompleted(ts *toolset.ToolState) bool {
-	if ts == nil {
-		return false
-	}
-	store := ts.TodoStore()
+func AllCompleted(store *todo.TodoStore) bool {
 	if store == nil {
 		return false
 	}
@@ -77,11 +68,7 @@ func AllCompleted(ts *toolset.ToolState) bool {
 // that gets folded into the transcript when the panel auto-clears.
 // Mirrors Render's row shape but uses the green header style so the
 // snapshot reads as a definite "done" event in the scrollback.
-func RenderCompleteSnapshot(ts *toolset.ToolState, width int, th *theme.Theme) string {
-	if ts == nil {
-		return ""
-	}
-	store := ts.TodoStore()
+func RenderCompleteSnapshot(store *todo.TodoStore, width int, th *theme.Theme) string {
 	if store == nil {
 		return ""
 	}

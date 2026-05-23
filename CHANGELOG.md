@@ -13,6 +13,49 @@ Stability tiers are defined in [`docs/sdk-stability.md`](docs/sdk-stability.md).
   the `monitor` tool. Monitors can currently only be stopped by killing
   the underlying shell process (e.g., `pkill`).
 
+## [v0.2.8-alpha.1] — SDK v2.1: public UI read-models
+
+First slice of the SDK v2 "harden to v1.0" roadmap
+(`docs/evva-sdk/sdk-v2.md`). Closes the internal-type leak on the
+`pkg/ui.Controller` surface so a UI in a separate module can implement
+the contract without importing evva internals.
+
+### Breaking
+
+- `pkg/ui.Controller` no longer exposes `Session()` (returned
+  `*internal/session.Session`) or `ToolState()` (returned
+  `*internal/toolset.ToolState`). Both named unreachable internal types,
+  so a downstream UI could not satisfy the interface. Migrate to the
+  public-typed accessors added below:
+  - `Session().GetMessages()` → `Messages() []llm.Message`
+  - `Session().Usage` → `Usage() llm.Usage`
+  - `Session().LastTurnInputTokens()` → `LastTurnInputTokens() int`
+  - `ToolState().TodoStore()` → `TodoStore() *todo.TodoStore`
+  - `ToolState().DaemonState()` → `DaemonState() *daemon.DaemonState`
+    (now returns nil until the first daemon registers — nil-check)
+  - `ToolState().UserPromptQueue().Enqueue(p)` → `EnqueueUserPrompt(p string)`
+
+### Added
+
+- `pkg/ui.Controller` gains `Messages`, `Usage`, `LastTurnInputTokens`,
+  `TodoStore`, `DaemonState`, and `EnqueueUserPrompt` — every parameter
+  and return type is public (`pkg/llm`, `pkg/tools/todo`,
+  `pkg/tools/daemon`). The same six methods are implemented on the agent.
+- `docs/evva-sdk/sdk-v2.md` — the SDK v2 roadmap (hardening to a stable
+  v1.0; public read-models, pluggable permissions, multi-persona SDK,
+  and dogfooding `cmd/evva` onto `pkg/`).
+
+### Internal
+
+- Reference TUI (`internal/ui/bubbletea_v2`) migrated to the public
+  accessors; the `todos` / `agents` / `bgtasks` / `monitors` components
+  and `app/root.go` no longer import `internal/toolset` or
+  `internal/session`.
+- `pkg/ui/controller_compile_test.go` — new acceptance gate: a stub
+  satisfies `ui.Controller` using only public imports, so a regression
+  that re-leaks an internal type fails the build.
+- `pkg/version.Version` bumped to `0.2.8-alpha.1`.
+
 ## [v0.2.6-alpha.2]
 
 ### Fixed
@@ -321,7 +364,8 @@ Initial published tag — Phase 13 SDK split + Phase 14 session storage +
 Phase 15 friday proof of concept. See `CLAUDE.md` for the per-phase
 deliverables.
 
-[Unreleased]: https://github.com/johnny1110/evva/compare/v0.2.6-alpha.2...HEAD
+[Unreleased]: https://github.com/johnny1110/evva/compare/v0.2.8-alpha.1...HEAD
+[v0.2.8-alpha.1]: https://github.com/johnny1110/evva/releases/tag/v0.2.8-alpha.1
 [v0.2.6-alpha.2]: https://github.com/johnny1110/evva/releases/tag/v0.2.6-alpha.2
 [v0.2.6-alpha.1]: https://github.com/johnny1110/evva/releases/tag/v0.2.6-alpha.1
 [v0.2.5-alpha.1]: https://github.com/johnny1110/evva/releases/tag/v0.2.5-alpha.1
