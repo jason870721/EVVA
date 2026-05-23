@@ -9,13 +9,13 @@ import (
 	"strings"
 
 	"github.com/johnny1110/evva/internal/agent/attachments"
-	"github.com/johnny1110/evva/pkg/event"
-	"github.com/johnny1110/evva/pkg/constant"
-	"github.com/johnny1110/evva/pkg/llm"
 	"github.com/johnny1110/evva/internal/permission"
+	"github.com/johnny1110/evva/internal/tools/mode"
+	"github.com/johnny1110/evva/pkg/constant"
+	"github.com/johnny1110/evva/pkg/event"
+	"github.com/johnny1110/evva/pkg/llm"
 	"github.com/johnny1110/evva/pkg/tools"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
-	"github.com/johnny1110/evva/internal/tools/mode"
 	"github.com/johnny1110/evva/pkg/tools/shell"
 )
 
@@ -351,6 +351,7 @@ func (a *Agent) execTool(ctx context.Context, call *tools.Call, tool tools.Tool,
 // permission config). When skipped, the call falls through to Execute as
 // if mode were ModeBypass — preserves prior behavior so existing tests
 // keep working.
+// return (isDenied, denyResult)
 func (a *Agent) permissionGate(ctx context.Context, call *tools.Call) (bool, *llm.ToolResult) {
 	store := a.permissionStore
 	if store == nil {
@@ -382,6 +383,7 @@ func (a *Agent) permissionGate(ctx context.Context, call *tools.Call) (bool, *ll
 			Reason:           d.Reason,
 			Hint:             hint,
 		}
+		// Request() will block until user approved.
 		resp, err := a.permissionBroker.Request(ctx, req)
 		if err != nil {
 			a.logger.Warn("permission.broker.cancel", "tool", call.Name, "err", err)

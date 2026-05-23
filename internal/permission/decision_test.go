@@ -145,7 +145,7 @@ func TestDecide_AcceptEdits(t *testing.T) {
 
 func TestDecide_DefaultAutoAllowsSafeTools(t *testing.T) {
 	// Read-only/self-coordination tools auto-allow in default mode.
-	for _, name := range []string{"read", "tree", "agent", "todo_write", "tool_search", "enter_plan_mode", "exit_plan_mode"} {
+	for _, name := range []string{"read", "tree", "agent", "todo_write", "tool_search", "enter_plan_mode", "exit_plan_mode", "daemon_list", "daemon_output"} {
 		d := Decide(mkCall(name, ""), ModeDefault, NewStore(), Hint{}, "")
 		if d.Behavior != BehaviorAllow {
 			t.Errorf("default should auto-allow %q; got %v (%s)", name, d.Behavior, d.Reason)

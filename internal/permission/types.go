@@ -179,9 +179,9 @@ type Hint struct {
 // loop). Source is set when the user chose "Allow for this session" so the
 // caller knows where to write the new rule.
 type Decision struct {
-	Behavior     Behavior
-	Reason       string
-	AddRule      *Rule // non-nil when user chose "Allow for this session"
+	Behavior Behavior
+	Reason   string
+	AddRule  *Rule // non-nil when user chose "Allow for this session"
 }
 
 // ReadOnlyOrSelfTools is the baseline auto-allow set: tools that either
@@ -210,6 +210,11 @@ var ReadOnlyOrSelfTools = map[string]bool{
 	"agent":             true,
 	"tool_search":       true,
 	"skill":             true,
+	// Daemon introspection — enumerate registered daemons and read their
+	// captured output. Pure reads over agent-owned state; daemon_stop is
+	// excluded since it mutates (terminates the daemon).
+	"daemon_list":   true,
+	"daemon_output": true,
 	// Plan-mode coordination — the model must be able to enter and exit
 	// plan mode while ModePlan denies everything else. Both are otherwise
 	// session-state-only (they don't touch the filesystem outside of the

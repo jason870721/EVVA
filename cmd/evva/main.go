@@ -13,20 +13,20 @@ import (
 	"strings"
 	"syscall"
 
-	config "github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/internal/agent"
-	"github.com/johnny1110/evva/pkg/event"
-	"github.com/johnny1110/evva/pkg/llm"
-	_ "github.com/johnny1110/evva/pkg/llm/builtins" // register anthropic/deepseek/ollama into llm.DefaultRegistry()
 	"github.com/johnny1110/evva/internal/memdir"
 	"github.com/johnny1110/evva/internal/permission"
 	"github.com/johnny1110/evva/internal/question"
-	"github.com/johnny1110/evva/pkg/tools/fs"
-	"github.com/johnny1110/evva/pkg/tools/daemon"
-	"github.com/johnny1110/evva/pkg/tools/todo"
-	"github.com/johnny1110/evva/internal/update"
-	"github.com/johnny1110/evva/pkg/ui"
 	bubbleteav2 "github.com/johnny1110/evva/internal/ui/bubbletea_v2"
+	"github.com/johnny1110/evva/internal/update"
+	config "github.com/johnny1110/evva/pkg/config"
+	"github.com/johnny1110/evva/pkg/event"
+	"github.com/johnny1110/evva/pkg/llm"
+	_ "github.com/johnny1110/evva/pkg/llm/builtins" // register anthropic/deepseek/ollama into llm.DefaultRegistry()
+	"github.com/johnny1110/evva/pkg/tools/daemon"
+	"github.com/johnny1110/evva/pkg/tools/fs"
+	"github.com/johnny1110/evva/pkg/tools/todo"
+	"github.com/johnny1110/evva/pkg/ui"
 	"github.com/joho/godotenv"
 )
 
@@ -73,10 +73,12 @@ func main() {
 	// + cfg.WorkDirSkillsDir. Hosts that want a programmatic catalog pre-build
 	// one and pass agent.WithSkillRegistry; this binary uses the default.
 
+	//--------------------------------------------------------------------------------------
 	// Load project memory (<workdir>/EVVA.md) and user memory
 	// (<EVVA_HOME>/USER_PROFILE.md) once at startup; the snapshot threads
 	// into the main agent's prompt. Missing files are silent; oversize /
 	// permission warnings are surfaced on stderr like skill warnings.
+	// TODO: memSnap should move into agent, support evva SDK to have this feature.
 	memSnap := memdir.Load(cfg.WorkDir, cfg.AppHome, cfg.GetEnableAutoMemory())
 	for _, w := range memSnap.Warnings {
 		fmt.Fprintln(os.Stderr, "evva:", w)
@@ -89,6 +91,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "evva: auto-memory is enabled — the agent will save persistent notes to USER_PROFILE.md and projects/<key>/MEMORY.md. Disable with /config.")
 		}
 	}
+	//--------------------------------------------------------------------------------------
 
 	// Build the agent registry first: ResolveMainProfile reads from it to
 	// pick the right persona (built-in evva or a disk-loaded persona under
@@ -239,6 +242,8 @@ func buildApprovalEvent(req permission.ApprovalRequest) event.Event {
 		riskHint = "dangerous"
 	case req.Hint.IsReadOnly:
 		riskHint = "read-only"
+	default:
+		riskHint = "unknown"
 	}
 	return event.Event{
 		Kind:    event.KindApprovalNeeded,

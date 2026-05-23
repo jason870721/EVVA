@@ -339,7 +339,7 @@ evva gates every tool call through a **permission mode**. Four modes, cycled wit
 
 | mode | auto-allowed without asking | best for |
 | --- | --- | --- |
-| **`default`** | Read-only tools (`read`, `tree`, `grep`, `glob`, `web_*`, `json_query`, `calc`), agent self-coordination (`agent`, `todo_write`, `skill`, `tool_search`, `ask_user_question`), and **read-only bash commands** (`ls`, `cat`, `head`, `grep`, `git status`, `git log`, …). File writes and any other bash command **ask**. | Beginners, sensitive work, default stance |
+| **`default`** | Read-only tools (`read`, `tree`, `grep`, `glob`, `web_*`, `json_query`, `calc`, `daemon_list`, `daemon_output`), agent self-coordination (`agent`, `todo_write`, `skill`, `tool_search`, `ask_user_question`), and **read-only bash commands** (`ls`, `cat`, `head`, `grep`, `git status`, `git log`, …). File writes and any other bash command **ask**. | Beginners, sensitive work, default stance |
 | **`accept_edits`** | Same as `default` + file edits (`edit`, `write`, `notebook_edit`) + common filesystem bash commands (`mkdir`, `touch`, `mv`, `cp`, `rmdir`, `ln`, `chmod`, `chown`). | Iterating on code under review |
 | **`plan`** | Same read-only safelist as `default`. Anything outside that set is **denied outright** (no prompt). | Exploring a codebase before deciding what to change |
 | **`bypass`** | Everything. Dangerous-command classification still logs in the background, but never blocks. | **Isolated containers and VMs only** — propagates to subagents |

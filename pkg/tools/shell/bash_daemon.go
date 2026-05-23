@@ -84,7 +84,7 @@ func newBashDaemon(
 		workdir:     workdir,
 		status:      daemon.StatusRunning,
 		ctx:         ctx,
-		cancel:      cancel,
+		cancel:      cancel, // cancel func
 		state:       state,
 		logger:      logger,
 	}
