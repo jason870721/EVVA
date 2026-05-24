@@ -6,9 +6,10 @@ import (
 	agent_impl "github.com/johnny1110/evva/internal/agent"
 	"github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/event"
+	"github.com/johnny1110/evva/pkg/permission"
 	"github.com/johnny1110/evva/pkg/skill"
-	pubtoolset "github.com/johnny1110/evva/pkg/toolset"
 	"github.com/johnny1110/evva/pkg/tools"
+	pubtoolset "github.com/johnny1110/evva/pkg/toolset"
 )
 
 // Option mutates an Agent during construction. Downstream callers build
@@ -98,3 +99,26 @@ func WithSkillRegistry(r *skill.Registry) Option {
 	return agent_impl.WithSkillRegistry(r)
 }
 
+// WithPermissionStore installs the rule store the permission gate consults.
+// Build one with permission.NewStore() (empty) or permission.Load(workdir,
+// home) to read project + user rules from disk. One Store is shared by the
+// root agent and every subagent it spawns.
+//
+// Omit it to run with no pre-seeded rules — the active permission mode's
+// safelist still governs which calls auto-allow, ask, or deny.
+func WithPermissionStore(s *permission.Store) Option {
+	return agent_impl.WithPermissionStore(s)
+}
+
+// WithPermissionBroker installs a custom approval back-channel — the seam for
+// a downstream allow/deny policy. Build one with permission.NewBroker() and
+// register a callback via permission.SetOnRequest that inspects each
+// permission.ApprovalRequest and calls Broker.Respond with a Decision.
+//
+// Omit it and the agent installs a default broker: when a sink is present
+// (WithSink) it emits an approval event for an interactive UI to resolve via
+// Agent.RespondPermission; with no sink it auto-denies. One Broker is shared
+// by the root agent and every subagent.
+func WithPermissionBroker(b permission.Broker) Option {
+	return agent_impl.WithPermissionBroker(b)
+}

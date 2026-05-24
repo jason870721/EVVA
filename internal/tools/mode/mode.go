@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/johnny1110/evva/internal/permission"
+	"github.com/johnny1110/evva/pkg/permission"
 	"github.com/johnny1110/evva/pkg/tools"
 )
 
@@ -399,4 +399,3 @@ func resolveController(lookup ControllerLookup) PlanModeController {
 	}
 	return lookup()
 }
-

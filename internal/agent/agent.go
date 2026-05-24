@@ -16,7 +16,6 @@ import (
 	"github.com/johnny1110/evva/internal/agent/sysprompt"
 	"github.com/johnny1110/evva/internal/logger"
 	"github.com/johnny1110/evva/internal/memdir"
-	"github.com/johnny1110/evva/internal/permission"
 	"github.com/johnny1110/evva/internal/question"
 	"github.com/johnny1110/evva/internal/session"
 	"github.com/johnny1110/evva/internal/tools/mode"
@@ -24,6 +23,7 @@ import (
 	"github.com/johnny1110/evva/pkg/common"
 	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/pkg/llm"
+	"github.com/johnny1110/evva/pkg/permission"
 	"github.com/johnny1110/evva/pkg/tools"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
 	"github.com/johnny1110/evva/pkg/tools/todo"
@@ -371,6 +371,12 @@ func New(parent *Agent, profile Profile, opts ...Option) (*Agent, error) {
 		a.toolState.SetPlanController(a)     // only main agent can flip plan mode.
 		a.toolState.SetWorktreeController(a) // only main agent can enter/exit a worktree.
 	}
+	// Install the default permission + question brokers and the sink bridge
+	// when the host didn't supply its own. Root-only: subagents inherit the
+	// root's wired brokers via spawn.go. Must run before SetQuestionBroker
+	// below so the broker it plumbs is the finalized one.
+	wireBrokers(a)
+
 	// Question broker is process-wide and shared by root and subagents alike.
 	a.toolState.SetQuestionBroker(a.questionBroker)
 

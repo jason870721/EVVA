@@ -15,14 +15,13 @@ import (
 
 	"github.com/johnny1110/evva/internal/agent"
 	"github.com/johnny1110/evva/internal/memdir"
-	"github.com/johnny1110/evva/internal/permission"
-	"github.com/johnny1110/evva/internal/question"
 	bubbleteav2 "github.com/johnny1110/evva/internal/ui/bubbletea_v2"
 	"github.com/johnny1110/evva/internal/update"
 	config "github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/pkg/llm"
 	_ "github.com/johnny1110/evva/pkg/llm/builtins" // register anthropic/deepseek/ollama into llm.DefaultRegistry()
+	"github.com/johnny1110/evva/pkg/permission"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
 	"github.com/johnny1110/evva/pkg/tools/fs"
 	"github.com/johnny1110/evva/pkg/tools/todo"
@@ -116,26 +115,26 @@ func main() {
 		profName = "evva"
 	}
 
-	// Permission system: load project + user rules, build the approval
-	// broker, resolve the active mode (CLI > YAML > "default"). One Store
-	// and one Broker per process — subagents inherit them via spawn.go.
+	// Permission system: load project + user rules and resolve the active
+	// mode (CLI > YAML > "default"). One Store per process — subagents
+	// inherit it via spawn.go. The agent owns the approval + question
+	// brokers and emits their requests to the sink, so the host wires no
+	// broker callbacks here.
 	permStore, permWarns := permission.Load(cfg.WorkDir, cfg.AppHome)
 	for _, w := range permWarns {
 		fmt.Fprintln(os.Stderr, "evva:", w.Error())
 	}
-	permBroker := permission.NewBroker()
 	permMode := resolvePermissionMode(*permModeFlag, cfg.PermissionMode)
-	qBroker := question.NewBroker()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	useTUI := !*noTUI && isTTY(os.Stdout)
 	if useTUI {
-		runTUI(ctx, prof, profName, memSnap, *maxIters, cfg.AppName, cfg.AppHome, agentReg, permStore, permBroker, permMode, qBroker, *uiKind)
+		runTUI(ctx, prof, profName, memSnap, *maxIters, cfg.AppName, cfg.AppHome, agentReg, permStore, permMode, *uiKind)
 		return
 	}
-	runCLI(ctx, prof, profName, memSnap, *maxIters, cfg.AppName, agentReg, permStore, permBroker, permMode, qBroker)
+	runCLI(ctx, prof, profName, memSnap, *maxIters, cfg.AppName, agentReg, permStore, permMode)
 }
 
 // resolvePermissionMode picks the active mode using CLI > YAML > "default"
@@ -162,27 +161,17 @@ func resolvePermissionMode(cliFlag, yamlValue string) permission.Mode {
 // or "v2" (clean-architecture rewrite, in active development). Both
 // satisfy the same ui.UI contract, so the agent-side wiring is
 // identical.
-func runTUI(ctx context.Context, prof agent.Profile, profName string, memSnap memdir.Snapshot, maxIters int, name, evvaHome string, agents *agent.AgentRegistry, permStore *permission.Store, permBroker permission.Broker, permMode permission.Mode, qBroker question.Broker, kind string) {
+func runTUI(ctx context.Context, prof agent.Profile, profName string, memSnap memdir.Snapshot, maxIters int, name, evvaHome string, agents *agent.AgentRegistry, permStore *permission.Store, permMode permission.Mode, kind string) {
 	var tui ui.UI
 	switch kind {
 	default:
 		tui = bubbleteav2.New(evvaHome)
 	}
 
-	// Register the broker's approval callback to emit KindApprovalNeeded
-	// through the TUI sink. The broker keeps the goroutine parked until
-	// the TUI calls Broker.Respond with the user's choice.
-	permission.SetOnRequest(permBroker, func(req permission.ApprovalRequest) {
-		tui.Emit(buildApprovalEvent(req))
-	})
-
-	// Register the question broker callback to emit KindQuestionNeeded
-	// through the TUI sink. The tool goroutine parks until the TUI calls
-	// Controller.RespondQuestion with the user's answers.
-	question.SetOnRequest(qBroker, func(req question.Request) {
-		tui.Emit(buildQuestionEvent(req))
-	})
-
+	// The agent owns the approval + question brokers: with a sink installed
+	// it emits KindApprovalNeeded / KindQuestionNeeded to the TUI, which
+	// renders the overlay and resolves via Controller.RespondPermission /
+	// RespondQuestion. No host broker wiring needed.
 	ag, err := agent.New(nil, prof,
 		agent.WithName(name),
 		agent.WithSink(tui),
@@ -191,9 +180,7 @@ func runTUI(ctx context.Context, prof agent.Profile, profName string, memSnap me
 		agent.WithPersona(profName),
 		agent.WithMemorySnapshot(memSnap),
 		agent.WithPermissionStore(permStore),
-		agent.WithPermissionBroker(permBroker),
 		agent.WithPermissionMode(permMode),
-		agent.WithQuestionBroker(qBroker),
 		agent.WithRootContext(ctx), // signal pump + bg tasks track the TUI ctx
 	)
 	if err != nil {
@@ -206,67 +193,11 @@ func runTUI(ctx context.Context, prof agent.Profile, profName string, memSnap me
 	}
 }
 
-// buildQuestionEvent converts a question.Request into the KindQuestionNeeded
-// event the TUI subscribes to.
-func buildQuestionEvent(req question.Request) event.Event {
-	items := make([]event.QuestionItem, len(req.Questions))
-	for i, q := range req.Questions {
-		opts := make([]event.QuestionOption, len(q.Options))
-		for j, o := range q.Options {
-			opts[j] = event.QuestionOption{Label: o.Label, Description: o.Description, Preview: o.Preview}
-		}
-		items[i] = event.QuestionItem{
-			Question:    q.Question,
-			Header:      q.Header,
-			MultiSelect: q.MultiSelect,
-			Options:     opts,
-		}
-	}
-	return event.Event{
-		Kind:    event.KindQuestionNeeded,
-		AgentID: req.AgentID,
-		QuestionNeeded: &event.QuestionNeededPayload{
-			RequestID: req.ID,
-			AgentID:   req.AgentID,
-			Questions: items,
-		},
-	}
-}
-
-// buildApprovalEvent converts a permission.ApprovalRequest into the
-// KindApprovalNeeded event the TUI subscribes to.
-func buildApprovalEvent(req permission.ApprovalRequest) event.Event {
-	riskHint := ""
-	switch {
-	case req.Hint.IsDangerous:
-		riskHint = "dangerous"
-	case req.Hint.IsReadOnly:
-		riskHint = "read-only"
-	default:
-		riskHint = "unknown"
-	}
-	return event.Event{
-		Kind:    event.KindApprovalNeeded,
-		AgentID: req.AgentID,
-		ApprovalNeeded: &event.ApprovalNeededPayload{
-			RequestID:        req.ID,
-			ToolName:         req.ToolName,
-			ToolInput:        req.ToolInput,
-			InputDescription: req.InputDescription,
-			Mode:             string(req.Mode),
-			Reason:           req.Reason,
-			RiskHint:         riskHint,
-			Matched:          req.Hint.Matched,
-			PlanContent:      req.PlanContent,
-		},
-	}
-}
-
 // runCLI is the headless one-shot path used by `-no-tui` and by pipes.
 // Preserves the original behavior: read prompt → run → stream events as
 // plain text → exit. ErrIterLimit triggers a synchronous "press Enter to
 // continue" prompt on stderr.
-func runCLI(ctx context.Context, prof agent.Profile, profName string, memSnap memdir.Snapshot, maxIters int, name string, agents *agent.AgentRegistry, permStore *permission.Store, permBroker permission.Broker, permMode permission.Mode, qBroker question.Broker) {
+func runCLI(ctx context.Context, prof agent.Profile, profName string, memSnap memdir.Snapshot, maxIters int, name string, agents *agent.AgentRegistry, permStore *permission.Store, permMode permission.Mode) {
 	prompt, err := readPrompt(flag.Args())
 	if err != nil {
 		exitf(2, "evva: %v", err)
@@ -275,37 +206,26 @@ func runCLI(ctx context.Context, prof agent.Profile, profName string, memSnap me
 		exitf(2, "usage: evva [-temp 0.7] [-max-tokens N] [-max-iters N] [-no-tui] [-permission-mode default|accept_edits|plan|bypass] <prompt>")
 	}
 
-	// CLI mode has no interactive approval or question surface — every Ask
-	// becomes a deny with a clear message so scripts fail fast instead of
-	// hanging on a phantom prompt.
-	permission.SetOnRequest(permBroker, func(req permission.ApprovalRequest) {
-		fmt.Fprintf(os.Stderr, "evva: -no-tui denied %s — pass -permission-mode=bypass or add a rule to permissions.json\n", req.ToolName)
-		_ = permBroker.Respond(req.ID, permission.Decision{
-			Behavior: permission.BehaviorDeny,
-			Reason:   "no interactive approval surface in -no-tui mode",
-		})
-	})
-	question.SetOnRequest(qBroker, func(req question.Request) {
-		fmt.Fprintf(os.Stderr, "evva: -no-tui cannot display AskUserQuestion — tool call will fail\n")
-		_ = qBroker.Respond(req.ID, question.Response{})
-	})
-
+	// CLI mode has no interactive surface. The agent emits approval /
+	// question requests to the sink; cliSink resolves them headlessly
+	// (deny / empty) through the Controller so scripts fail fast instead
+	// of hanging on a phantom prompt.
+	sink := &cliSink{out: os.Stdout}
 	ag, err := agent.New(nil, prof,
 		agent.WithName(name),
-		agent.WithSink(cliSink{out: os.Stdout}),
+		agent.WithSink(sink),
 		agent.WithMaxIterations(maxIters),
 		agent.WithAgentRegistry(agents),
 		agent.WithPersona(profName),
 		agent.WithMemorySnapshot(memSnap),
 		agent.WithPermissionStore(permStore),
-		agent.WithPermissionBroker(permBroker),
 		agent.WithPermissionMode(permMode),
-		agent.WithQuestionBroker(qBroker),
 		agent.WithRootContext(ctx),
 	)
 	if err != nil {
 		exitf(1, "evva: %v", err)
 	}
+	sink.ctrl = ag
 	defer ag.Shutdown()
 
 	resp, err := ag.Run(ctx, prompt)
@@ -345,11 +265,18 @@ func isTTY(f *os.File) bool {
 // cliSink writes a human-readable trace of the agent's events to out. It is
 // the fallback event.Sink for `-no-tui` mode — a stable, scriptable text
 // stream that pipes well into other tools.
+//
+// ctrl is the agent, set right after construction. Because `-no-tui` has no
+// interactive surface, the sink resolves the agent's approval / question
+// prompts itself (deny / empty) through the Controller — the broker's reply
+// channel is buffered, so responding inside Emit doesn't deadlock the parked
+// tool goroutine.
 type cliSink struct {
-	out io.Writer
+	out  io.Writer
+	ctrl ui.Controller
 }
 
-func (s cliSink) Emit(e event.Event) {
+func (s *cliSink) Emit(e event.Event) {
 	switch e.Kind {
 	case event.KindRunStart:
 		// stay quiet — the user already typed the prompt
@@ -392,6 +319,19 @@ func (s cliSink) Emit(e event.Event) {
 		fmt.Fprintln(s.out, "\n[cancelled]")
 	case event.KindRunEnd:
 		// final text already printed via KindText
+	case event.KindApprovalNeeded:
+		if e.ApprovalNeeded != nil && s.ctrl != nil {
+			fmt.Fprintf(os.Stderr, "evva: -no-tui denied %s — pass -permission-mode=bypass or add a rule to permissions.json\n", e.ApprovalNeeded.ToolName)
+			_ = s.ctrl.RespondPermission(e.ApprovalNeeded.RequestID, ui.PermissionDecision{
+				Behavior: "deny",
+				Reason:   "no interactive approval surface in -no-tui mode",
+			})
+		}
+	case event.KindQuestionNeeded:
+		if e.QuestionNeeded != nil && s.ctrl != nil {
+			fmt.Fprintln(os.Stderr, "evva: -no-tui cannot display AskUserQuestion — tool call will fail")
+			_ = s.ctrl.RespondQuestion(e.QuestionNeeded.RequestID, ui.QuestionResponse{})
+		}
 	case event.KindStoreUpdate:
 		if e.StoreUpdate != nil {
 			s.printStoreUpdate(e.StoreUpdate)
@@ -408,7 +348,7 @@ func (s cliSink) Emit(e event.Event) {
 	}
 }
 
-func (s cliSink) printStoreUpdate(p *event.StoreUpdatePayload) {
+func (s *cliSink) printStoreUpdate(p *event.StoreUpdatePayload) {
 	switch p.Domain {
 	case todo.Domain:
 		if list, ok := p.Payload.([]todo.Todo); ok {

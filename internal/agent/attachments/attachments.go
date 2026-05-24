@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/johnny1110/evva/internal/permission"
+	"github.com/johnny1110/evva/pkg/permission"
 )
 
 // Workflow chooses which plan-mode workflow the reminders describe.
@@ -108,7 +108,7 @@ func ComputePlanMode(in Input) []string {
 	// throttle by TurnsBetweenAttachments.
 	emitted := in.State.AttachmentsSinceExit()
 	if emitted == 0 {
-		out = append(out, wrap(workflowReminder(in, /*full=*/ true)))
+		out = append(out, wrap(workflowReminder(in /*full=*/, true)))
 		in.State.RecordAttachmentEmitted()
 		return out
 	}

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/johnny1110/evva/internal/permission"
+	"github.com/johnny1110/evva/pkg/permission"
 )
 
 // fakeController is a minimal PlanModeController for tests. Tracks mode
@@ -71,8 +71,8 @@ func (c *fakeController) PrePlanMode() permission.Mode {
 	return v.(permission.Mode)
 }
 func (c *fakeController) SetPrePlanMode(m permission.Mode) { c.prePlan.Store(m) }
-func (c *fakeController) PlanName() string                  { return "" }
-func (c *fakeController) SetPlanName(name string)           {}
+func (c *fakeController) PlanName() string                 { return "" }
+func (c *fakeController) SetPlanName(name string)          {}
 func (c *fakeController) Workdir() string                  { return c.workdir }
 func (c *fakeController) Broker() permission.Broker        { return c.broker }
 func (c *fakeController) AgentID() string                  { return c.agentID }

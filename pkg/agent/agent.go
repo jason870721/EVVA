@@ -6,13 +6,13 @@ import (
 	"log/slog"
 	"os"
 
-	config "github.com/johnny1110/evva/pkg/config"
 	agent_impl "github.com/johnny1110/evva/internal/agent"
 	"github.com/johnny1110/evva/internal/memdir"
-	"github.com/johnny1110/evva/internal/permission"
 	"github.com/johnny1110/evva/internal/question"
-	"github.com/johnny1110/evva/pkg/ui"
+	config "github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/constant"
+	"github.com/johnny1110/evva/pkg/permission"
+	"github.com/johnny1110/evva/pkg/ui"
 )
 
 // Config is the public constructor input for creating an agent.
@@ -64,33 +64,23 @@ func New(cfg Config) (Agent, error) {
 	prof := agent_impl.Main(appCfg, provider, model, nil, memSnap, nil)
 
 	permStore, _ := permission.Load(wd, appCfg.AppHome)
-	permBroker := permission.NewBroker()
 	permMode := permission.ModeBypass
 	if cfg.PermissionMode != "" {
 		if m, ok := permission.ParseMode(cfg.PermissionMode); ok {
 			permMode = m
 		}
 	}
-	permission.SetOnRequest(permBroker, func(req permission.ApprovalRequest) {
-		_ = permBroker.Respond(req.ID, permission.Decision{
-			Behavior: permission.BehaviorDeny,
-			Reason:   "no interactive approval surface in programmatic mode",
-		})
-	})
 
-	qBroker := question.NewBroker()
-	question.SetOnRequest(qBroker, func(req question.Request) {
-		_ = qBroker.Respond(req.ID, question.Response{})
-	})
-
+	// No sink is installed on this programmatic path, so the agent's default
+	// brokers auto-deny any approval / question request (a model that asks
+	// gets a clean denial rather than a hung goroutine). A host that wants
+	// real prompts passes its own sink + broker via NewWithProfile.
 	inner, err := agent_impl.New(nil, prof,
 		agent_impl.WithName(appCfg.AppName),
 		agent_impl.WithConfig(appCfg),
 		agent_impl.WithMaxIterations(cfg.MaxIters),
 		agent_impl.WithPermissionStore(permStore),
-		agent_impl.WithPermissionBroker(permBroker),
 		agent_impl.WithPermissionMode(permMode),
-		agent_impl.WithQuestionBroker(qBroker),
 		agent_impl.WithPersona("evva"),
 	)
 	if err != nil {

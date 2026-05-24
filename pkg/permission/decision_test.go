@@ -38,10 +38,10 @@ func TestDecide_PlanModeAllowsReadOnlyBash(t *testing.T) {
 	// Read-only bash commands (ls, cat, git status, etc.) auto-allow in plan
 	// mode via the classifier hint, so the model can inspect the codebase.
 	tests := []struct {
-		cmd     string
-		hint    Hint
-		want    Behavior
-		desc    string
+		cmd  string
+		hint Hint
+		want Behavior
+		desc string
 	}{
 		{"ls", Hint{IsReadOnly: true, Matched: "ls"}, BehaviorAllow, "read-only allow"},
 		{"cat foo.go", Hint{IsReadOnly: true, Matched: "cat"}, BehaviorAllow, "read-only + matched"},

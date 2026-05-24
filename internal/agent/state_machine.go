@@ -9,11 +9,11 @@ import (
 	"strings"
 
 	"github.com/johnny1110/evva/internal/agent/attachments"
-	"github.com/johnny1110/evva/internal/permission"
 	"github.com/johnny1110/evva/internal/tools/mode"
 	"github.com/johnny1110/evva/pkg/constant"
 	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/pkg/llm"
+	"github.com/johnny1110/evva/pkg/permission"
 	"github.com/johnny1110/evva/pkg/tools"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
 	"github.com/johnny1110/evva/pkg/tools/shell"

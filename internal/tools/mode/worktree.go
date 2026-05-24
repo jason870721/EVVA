@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/johnny1110/evva/internal/permission"
+	"github.com/johnny1110/evva/pkg/permission"
 	"github.com/johnny1110/evva/pkg/tools"
 )
 

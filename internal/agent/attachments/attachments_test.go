@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/johnny1110/evva/internal/permission"
+	"github.com/johnny1110/evva/pkg/permission"
 )
 
 func newState() *permission.PlanModeState { return permission.NewPlanModeState() }

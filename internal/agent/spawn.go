@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"strings"
 
-	config "github.com/johnny1110/evva/pkg/config"
-	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/internal/agent/sysprompt"
+	"github.com/johnny1110/evva/internal/tools/meta"
+	"github.com/johnny1110/evva/internal/tools/mode"
+	config "github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/constant"
+	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/pkg/llm"
 	"github.com/johnny1110/evva/pkg/tools"
 	"github.com/johnny1110/evva/pkg/tools/daemon"
-	"github.com/johnny1110/evva/internal/tools/meta"
-	"github.com/johnny1110/evva/internal/tools/mode"
 )
 
 // Spawn implements meta.SubagentSpawner. The AGENT tool's lookup resolves
@@ -82,6 +82,7 @@ func (a *Agent) Spawn(ctx context.Context, req meta.SpawnRequest) (string, error
 		WithPermissionMode(a.PermissionMode()),
 		WithPermissionStore(a.permissionStore),
 		WithPermissionBroker(a.permissionBroker),
+		WithQuestionBroker(a.questionBroker), // share the root's wired question broker
 	)
 	if err != nil {
 		if isolationSession != nil {

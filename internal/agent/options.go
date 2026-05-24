@@ -3,15 +3,15 @@ package agent
 import (
 	"context"
 
-	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/internal/agent/sysprompt"
 	"github.com/johnny1110/evva/internal/memdir"
-	"github.com/johnny1110/evva/internal/permission"
 	"github.com/johnny1110/evva/internal/question"
 	"github.com/johnny1110/evva/pkg/config"
+	"github.com/johnny1110/evva/pkg/event"
+	"github.com/johnny1110/evva/pkg/permission"
 	"github.com/johnny1110/evva/pkg/skill"
-	pubtoolset "github.com/johnny1110/evva/pkg/toolset"
 	"github.com/johnny1110/evva/pkg/tools"
+	pubtoolset "github.com/johnny1110/evva/pkg/toolset"
 )
 
 // customToolEntry pairs a custom tool name with the factory that builds

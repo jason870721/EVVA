@@ -2,7 +2,7 @@ package agent
 
 import (
 	agent_impl "github.com/johnny1110/evva/internal/agent"
-	"github.com/johnny1110/evva/internal/permission"
+	"github.com/johnny1110/evva/pkg/permission"
 )
 
 // PermissionMode is the typed form of the agent's permission stance.

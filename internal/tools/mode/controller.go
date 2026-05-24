@@ -1,6 +1,6 @@
 package mode
 
-import "github.com/johnny1110/evva/internal/permission"
+import "github.com/johnny1110/evva/pkg/permission"
 
 // PlanModeController is the seam between the EnterPlanMode / ExitPlanMode
 // tools and the owning agent. The agent satisfies it directly; the tool
