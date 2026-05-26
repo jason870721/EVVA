@@ -21,7 +21,7 @@ type ServerConfig struct {
 	Disabled bool // "disabled": true skips connect
 
 	// Stdio fields
-	Command string            // required when Type == TransportStdio
+	Command string // required when Type == TransportStdio
 	Args    []string
 	Env     map[string]string // ${VAR} / ${VAR:-default} expansion happens at Load
 

@@ -71,21 +71,26 @@ func (a *Agent) foldMcpIntoAllowlist() {
 	}
 }
 
-// foldMcpIntoProfile folds the discovered MCP names into the deferred
-// allowlist AND (for MAIN-tier profiles) re-renders the system prompt so
+// foldMcpIntoProfile, for MAIN-tier profiles, folds the discovered MCP
+// names into the deferred allowlist AND re-renders the system prompt so
 // the <available-deferred-tools> block advertises them. Called in New
-// after autoLoadMcp; no-op when nothing connected. Non-MAIN profiles
-// (subagents, custom) only get the allowlist update — they don't advertise
-// the MCP catalog by default (acceptance A12).
+// after autoLoadMcp; no-op when nothing connected.
+//
+// Non-MAIN profiles (subagents, custom) are intentionally left untouched:
+// a subagent reaches MCP tools only when its OWN profile opts in by listing
+// mcp__ names in DeferredTools (handled by New's normal profile→allowlist
+// path). This matches acceptance A12 — the manager (live sessions) is
+// shared with subagents, but the catalog is not auto-advertised or
+// auto-admitted into a subagent's allowlist.
 func (a *Agent) foldMcpIntoProfile() {
 	names := a.mcpDiscoveredNames()
 	if len(names) == 0 {
 		return
 	}
-	a.foldMcpIntoAllowlist()
 	if a.profile.Type != MAIN {
 		return
 	}
+	a.foldMcpIntoAllowlist()
 	persona := a.activePersona
 	if persona == "" {
 		persona = "evva"

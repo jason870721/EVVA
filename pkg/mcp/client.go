@@ -246,8 +246,8 @@ type mcpToolImpl struct {
 }
 
 func (t *mcpToolImpl) Name() string            { return t.name }
-func (t *mcpToolImpl) Description() string      { return t.desc }
-func (t *mcpToolImpl) Schema() json.RawMessage  { return t.schema }
+func (t *mcpToolImpl) Description() string     { return t.desc }
+func (t *mcpToolImpl) Schema() json.RawMessage { return t.schema }
 
 func (t *mcpToolImpl) Execute(ctx context.Context, _ *slog.Logger, in json.RawMessage) (tools.Result, error) {
 	var args map[string]any
