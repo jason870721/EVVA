@@ -371,19 +371,12 @@ func New(parent *Agent, profile Profile, opts ...Option) (*Agent, error) {
 	// extend the profile's active list so they show up to the LLM. Duplicate
 	// registrations are silently absorbed — agents constructed back-to-back
 	// against the same custom catalog re-use the first registration.
-	activeNames := profile.ActiveTools
-	if len(a.customTools) > 0 {
-		reg := pubtoolset.DefaultRegistry()
-		extra := make([]tools.ToolName, 0, len(a.customTools))
-		for _, ct := range a.customTools {
-			if !reg.Has(ct.name) {
-				if regErr := reg.Register(ct.name, ct.factory); regErr != nil {
-					return nil, fmt.Errorf("agent: register custom tool %q: %w", ct.name, regErr)
-				}
-			}
-			extra = append(extra, ct.name)
-		}
-		activeNames = append(append([]tools.ToolName{}, profile.ActiveTools...), extra...)
+	// Custom tools (WithCustomTool) extend the profile's active list. The same
+	// merge runs on every active-set rebuild via activeToolNames, so a reload
+	// never drops downstream-injected tools.
+	activeNames, err := a.activeToolNames(profile.ActiveTools)
+	if err != nil {
+		return nil, err
 	}
 
 	// Expose tools to the llm api call, also init at first.
@@ -596,6 +589,30 @@ func (a *Agent) SetLLMTopP(v *float64) error {
 	return nil
 }
 
+// activeToolNames returns base (a profile's ActiveTools) extended with every
+// WithCustomTool name, (re-)ensuring each custom factory is registered on the
+// pkg/toolset DefaultRegistry. New builds the initial active set through it, and
+// every active-set REBUILD (SwitchProfile, ResumeSnapshot, SwitchWorkdir) MUST
+// too: a rebuild that uses profile.ActiveTools alone silently drops downstream-
+// injected tools — e.g. a swarm member losing its task_*/send_message tools
+// after a restart-resume, leaving it deadlocked with only its profile tools.
+func (a *Agent) activeToolNames(base []tools.ToolName) ([]tools.ToolName, error) {
+	if len(a.customTools) == 0 {
+		return base, nil
+	}
+	reg := pubtoolset.DefaultRegistry()
+	out := append([]tools.ToolName{}, base...)
+	for _, ct := range a.customTools {
+		if !reg.Has(ct.name) {
+			if err := reg.Register(ct.name, ct.factory); err != nil {
+				return nil, fmt.Errorf("agent: register custom tool %q: %w", ct.name, err)
+			}
+		}
+		out = append(out, ct.name)
+	}
+	return out, nil
+}
+
 // SwitchProfile rebuilds the agent for a new persona — different system
 // prompt, different active/deferred tool lists, fresh session. Mirrors
 // SwitchLLM's running-guard discipline.
@@ -630,7 +647,12 @@ func (a *Agent) SwitchProfile(name string) error {
 
 	// Rebuild the active-tool map from the new profile. Reuses the
 	// existing toolState so observers (UI panels) keep their subscriptions.
-	exposeTools, err := toolset.Build(newProfile.ActiveTools, a.toolState)
+	// activeToolNames re-merges custom tools so the switch doesn't drop them.
+	activeNames, err := a.activeToolNames(newProfile.ActiveTools)
+	if err != nil {
+		return err
+	}
+	exposeTools, err := toolset.Build(activeNames, a.toolState)
 	if err != nil {
 		return fmt.Errorf("agent: build active tools: %w", err)
 	}
@@ -784,7 +806,13 @@ func (a *Agent) ResumeSnapshot(snap *session.Snapshot) error {
 	newProfile.LLMProvider = provider
 	newProfile.LLMModel = model
 
-	exposeTools, err := toolset.Build(newProfile.ActiveTools, a.toolState)
+	// Re-merge custom tools so a resume (e.g. swarm restart-resume) keeps the
+	// downstream-injected tools instead of collapsing to the profile's list.
+	activeNames, err := a.activeToolNames(newProfile.ActiveTools)
+	if err != nil {
+		return err
+	}
+	exposeTools, err := toolset.Build(activeNames, a.toolState)
 	if err != nil {
 		return fmt.Errorf("agent: build active tools: %w", err)
 	}
@@ -1114,8 +1142,13 @@ func (a *Agent) SwitchWorkdir(path string) error {
 
 	// Rebuild active tools so workdir-bound factories pick up the new
 	// path. The toolState (and its registered observers) is reused — UI
-	// panels stay subscribed across the switch.
-	exposeTools, err := toolset.Build(a.profile.ActiveTools, a.toolState)
+	// panels stay subscribed across the switch. activeToolNames re-merges
+	// custom tools so the switch doesn't drop them.
+	names, err := a.activeToolNames(a.profile.ActiveTools)
+	var exposeTools []tools.Tool
+	if err == nil {
+		exposeTools, err = toolset.Build(names, a.toolState)
+	}
 	if err != nil {
 		// Roll back the workdir on failure so the agent stays consistent.
 		a.workdirMu.Lock()
