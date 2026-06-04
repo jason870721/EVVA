@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/johnny1110/evva/internal/swarm/webapi"
 	"github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/constant"
 	"github.com/johnny1110/evva/pkg/llm"
@@ -184,6 +185,22 @@ func taskStatus(svc *Service, space string, id int64) string {
 	return ""
 }
 
+// roundTrip returns the leader→worker-a assignment and the worker-a→leader
+// report messages (nil until each exists), for asserting the two-way exchange.
+func roundTrip(svc *Service, space string) (assign, report *webapi.MessageInfo) {
+	msgs, _ := svc.Messages(space)
+	for i := range msgs {
+		m := &msgs[i]
+		switch {
+		case m.Sender == "leader" && m.Recipient == "worker-a":
+			assign = m
+		case m.Sender == "worker-a" && m.Recipient == "leader":
+			report = m
+		}
+	}
+	return assign, report
+}
+
 // TestE2E_FullLoop is the centerpiece (A3/A4/A10): assign → collaborate → verify
 // → complete, asserting the 5-state outcome, the message round-trip + mark-read,
 // and idle-no-token.
@@ -208,25 +225,17 @@ func TestE2E_FullLoop(t *testing.T) {
 		return taskStatus(svc, space, 1) == "completed"
 	})
 
-	// Message round-trip both ways, both marked read (drain A consumed them).
-	msgs, _ := svc.Messages(space)
-	var sawAssign, sawReport bool
-	for _, m := range msgs {
-		if m.Sender == "leader" && m.Recipient == "worker-a" {
-			sawAssign = true
-			if m.ReadAt == nil {
-				t.Error("assignment message was never marked read")
-			}
-		}
-		if m.Sender == "worker-a" && m.Recipient == "leader" {
-			sawReport = true
-			if m.ReadAt == nil {
-				t.Error("report message was never marked read")
-			}
-		}
-	}
-	if !sawAssign || !sawReport {
-		t.Errorf("message round-trip incomplete: assign=%v report=%v", sawAssign, sawReport)
+	// Message round-trip both ways, both marked read. drain A marks a message
+	// read only *after* the receiving run finishes — which can lag the task
+	// reaching `completed` (the verify happens mid-run) — so wait for it rather
+	// than reading the instant the task flips.
+	pollUntil(t, "both messages marked read", 25*time.Second, func() bool {
+		assign, report := roundTrip(svc, space)
+		return assign != nil && report != nil && assign.ReadAt != nil && report.ReadAt != nil
+	})
+	assign, report := roundTrip(svc, space)
+	if assign == nil || report == nil {
+		t.Fatalf("message round-trip incomplete: assign=%v report=%v", assign != nil, report != nil)
 	}
 
 	// Idle == no tokens: worker-b was never tasked, so it never ran → empty
