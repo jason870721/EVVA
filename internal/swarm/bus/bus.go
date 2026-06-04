@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"log/slog"
 	"sync"
 
 	"github.com/johnny1110/evva/internal/swarm/store"
@@ -138,6 +139,10 @@ func (b *Bus) signal(to, uuid string) {
 	select {
 	case ch <- uuid:
 	default:
+		// Buffer full: the hint is dropped but the row is durable, so the
+		// recipient still recovers it via store.UnreadFor on its next cycle.
+		// Worth a debug line — a chronically full mailbox is a real stall signal.
+		slog.Debug("swarm bus: mailbox hint dropped (buffer full)", "recipient", to, "id", uuid)
 	}
 }
 

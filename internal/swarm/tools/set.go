@@ -26,16 +26,20 @@ const (
 	toolTaskGet          = "task_get"
 )
 
-// init classifies the read/self swarm tools as auto-allow in pkg/permission's
-// name-keyed safelist (the one extension seam the gate exposes). The write-class
-// ledger mutators — task_assign, task_update_status, task_verify — stay out, so
-// they default to "ask" and the User oversees them when a space runs in a
-// non-bypass permission mode (invariant #6). task_create is planning, not a
-// dispatch, so it auto-allows: the Leader decomposes work freely and the gated
-// commit is task_assign (the moment a Worker is actually put to work).
+// init classifies the swarm's coordination tools as auto-allow in
+// pkg/permission's name-keyed safelist (the one extension seam the gate
+// exposes). This includes the Leader's task-ledger writes — task_assign,
+// task_update_status, task_verify: they are team coordination, not file/shell
+// side effects, and the store already enforces the leader-only guard
+// (store.ErrNotLeader), so routing them through a human approval bought no real
+// safety while stalling the swarm's core create→assign→verify loop on every
+// dispatch. The actual permission boundary is a Worker's file/shell writes,
+// which are NOT listed here and still gate in a non-bypass mode (invariant #6).
+// Use permission_mode: bypass only when you also want worker writes ungated.
 func init() {
 	for _, n := range []string{
-		toolSendMessage, toolListMembers, toolTaskList, toolMyTasks, toolTaskGet, toolTaskCreate,
+		toolSendMessage, toolListMembers, toolTaskList, toolMyTasks, toolTaskGet,
+		toolTaskCreate, toolTaskAssign, toolTaskUpdateStatus, toolTaskVerify,
 	} {
 		permission.ReadOnlyOrSelfTools[n] = true
 	}

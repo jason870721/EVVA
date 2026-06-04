@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -60,6 +61,7 @@ func (s *Store) PutMessage(m Message) error {
 	if err != nil {
 		return fmt.Errorf("store: put message %s: %w", m.ID, err)
 	}
+	slog.Debug("swarm message stored", "id", m.ID, "sender", m.Sender, "recipient", m.Recipient, "ref_task", m.RefTask)
 	return nil
 }
 
@@ -97,7 +99,9 @@ func (s *Store) MarkRead(id string) error {
 		if err := s.db.QueryRow(`SELECT 1 FROM messages WHERE id = ?`, id).Scan(&one); errors.Is(err, sql.ErrNoRows) {
 			return ErrMessageNotFound
 		}
+		return nil
 	}
+	slog.Debug("swarm message marked read", "id", id)
 	return nil
 }
 

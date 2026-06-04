@@ -8,11 +8,29 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/johnny1110/evva/internal/swarm/service"
 )
+
+// parseLogLevel maps EVVA_LOG_LEVEL (debug|info|warn|error, case-insensitive)
+// to a slog level, defaulting to info. Set EVVA_LOG_LEVEL=debug before
+// `evva service start` to surface the swarm store path, task lifecycle, and
+// per-member run/wake tracing in the service log.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
 
 // runService dispatches `evva service <start|stop|status>`.
 //
@@ -101,7 +119,13 @@ func serviceRun() {
 		fmt.Fprintf(os.Stderr, "evva service: %v\n", err)
 		os.Exit(1)
 	}
-	svc.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// One logger for the whole daemon. SetDefault routes package-level slog
+	// calls (the swarm store path / task lifecycle / bus) to the same service
+	// log as the service's own logger. Level is env-tunable: run
+	// `EVVA_LOG_LEVEL=debug evva service start` to see the full swarm trace.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(os.Getenv("EVVA_LOG_LEVEL"))}))
+	slog.SetDefault(logger)
+	svc.SetLogger(logger)
 
 	if err := os.WriteFile(tokenPath(), []byte(svc.Token()), 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "evva service: write token: %v\n", err)

@@ -3,7 +3,6 @@ package swarm
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"sync"
@@ -48,12 +47,24 @@ const defaultTickInterval = time.Second
 // the run loops up.
 func NewSupervisor(sp *SwarmSpace) *Supervisor {
 	return &Supervisor{
-		sp:           sp,
-		bus:          sp.Bus,
-		store:        sp.Store,
-		log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sp:    sp,
+		bus:   sp.Bus,
+		store: sp.Store,
+		// Default to the process logger (the daemon routes it to the service
+		// log) rather than io.Discard, so a swarm runs observable out of the
+		// box; SetLogger overrides it. The old discard default is why the
+		// run loop was invisible during debugging.
+		log:          slog.Default(),
 		tickInterval: defaultTickInterval,
 		members:      make(map[string]*memberRun),
+	}
+}
+
+// SetLogger swaps the supervisor's logger. The service wires its own logger in
+// so every member's wake/run lifecycle lands in the same log stream.
+func (s *Supervisor) SetLogger(l *slog.Logger) {
+	if l != nil {
+		s.log = l
 	}
 }
 

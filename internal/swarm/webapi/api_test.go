@@ -25,7 +25,7 @@ type fakeBackend struct {
 	mu       sync.Mutex
 	runs     [][3]string // {space, agent, prompt}
 	msgs     [][3]string // {space, to, body}
-	perms    [][5]string // {space, agent, reqId, behavior, reason}
+	perms    [][6]string // {space, agent, reqId, behavior, reason, ruleTool}
 	suspends [][2]string
 }
 
@@ -78,10 +78,10 @@ func (f *fakeBackend) SendUserMessage(space, to, subject, body string) error {
 	f.msgs = append(f.msgs, [3]string{space, to, body})
 	return nil
 }
-func (f *fakeBackend) RespondPermission(space, agent, reqID, behavior, reason string) error {
+func (f *fakeBackend) RespondPermission(space, agent, reqID, behavior, reason, ruleTool string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.perms = append(f.perms, [5]string{space, agent, reqID, behavior, reason})
+	f.perms = append(f.perms, [6]string{space, agent, reqID, behavior, reason, ruleTool})
 	return nil
 }
 func (f *fakeBackend) RespondQuestion(string, string, string, map[string]string) error { return nil }
@@ -265,8 +265,43 @@ func TestWSRespondPermission(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.perms) != 1 || fake.perms[0] != [5]string{"sp-a", "leader", "r1", "allow", ""} {
+	if len(fake.perms) != 1 || fake.perms[0] != [6]string{"sp-a", "leader", "r1", "allow", "", ""} {
 		t.Fatalf("permission not routed: %+v", fake.perms)
+	}
+}
+
+// "Always allow" carries the tool name through as ruleTool so the backend can
+// seed a session allow rule (the agent side turns it into a tool-wide rule).
+func TestWSRespondPermission_AlwaysAllow(t *testing.T) {
+	fake := newFake()
+	hub := NewHub()
+	srv := httptest.NewServer(NewRouter(fake, hub, nil))
+	defer srv.Close()
+
+	wsBase := "ws" + strings.TrimPrefix(srv.URL, "http")
+	c := dialWS(t, wsBase+"/ws?space=sp-a&token=secret")
+	defer c.Close()
+	waitConns(t, hub, 1)
+
+	cmd := `{"type":"respond_permission","agent":"builder","reqId":"r2","behavior":"allow","ruleTool":"write"}`
+	if err := websocket.Message.Send(c, cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		fake.mu.Lock()
+		n := len(fake.perms)
+		fake.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.perms) != 1 || fake.perms[0] != [6]string{"sp-a", "builder", "r2", "allow", "", "write"} {
+		t.Fatalf("always-allow ruleTool not routed: %+v", fake.perms)
 	}
 }
 

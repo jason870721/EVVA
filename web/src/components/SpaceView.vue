@@ -88,7 +88,15 @@ async function send(text) {
 }
 
 function onPermission(d) {
-  sock && sock.send({ type: 'respond_permission', agent: d.agent, reqId: d.reqId, behavior: d.behavior, reason: d.reason || '' })
+  sock &&
+    sock.send({
+      type: 'respond_permission',
+      agent: d.agent,
+      reqId: d.reqId,
+      behavior: d.behavior,
+      reason: d.reason || '',
+      ruleTool: d.ruleTool || '', // non-empty on "Always allow" → backend seeds a session rule
+    })
   approval.value = null
 }
 function onQuestion(d) {

@@ -260,6 +260,7 @@ func (s *Service) register(m agentdef.Manifest, loaded []agentdef.Loaded, cfg *c
 	sp.Reload()
 
 	super := swarm.NewSupervisor(sp)
+	super.SetLogger(s.log) // member wake/run lifecycle into the service log
 	spaceCtx, cancel := context.WithCancel(s.rootCtx)
 	super.Start(spaceCtx)
 
@@ -569,12 +570,19 @@ func (s *Service) SendUserMessage(id, to, subject, body string) error {
 	return err
 }
 
-func (s *Service) RespondPermission(id, agent, reqID, behavior, reason string) error {
+func (s *Service) RespondPermission(id, agent, reqID, behavior, reason, ruleTool string) error {
 	ctl, ok := s.controller(id, agent)
 	if !ok {
 		return fmt.Errorf("swarm: unknown space/agent %q/%q", id, agent)
 	}
-	return ctl.RespondPermission(reqID, ui.PermissionDecision{Behavior: behavior, Reason: reason})
+	dec := ui.PermissionDecision{Behavior: behavior, Reason: reason}
+	// "Always allow": seed a tool-wide session allow rule (empty Content matches
+	// every call to that tool) so the agent's gate stops re-prompting for it this
+	// session — what makes a coding swarm practical in a non-bypass mode.
+	if ruleTool != "" {
+		dec.AddRule = &ui.PermissionRuleSeed{ToolName: ruleTool}
+	}
+	return ctl.RespondPermission(reqID, dec)
 }
 
 func (s *Service) RespondQuestion(id, agent, reqID string, answers map[string]string) error {

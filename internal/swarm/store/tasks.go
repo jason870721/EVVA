@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -98,7 +99,12 @@ func (s *Store) CreateTask(t Task) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("store: create task: %w", err)
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("store: create task: last insert id: %w", err)
+	}
+	slog.Info("swarm task created", "id", id, "title", t.Title, "assignee", t.Assignee, "by", t.CreatedBy)
+	return id, nil
 }
 
 // TransitionTask moves a task to `to`, enforcing the state machine. It is
@@ -138,6 +144,7 @@ func (s *Store) TransitionTask(id int64, to Status, by Actor, note string) error
 	if err != nil {
 		return fmt.Errorf("store: transition task %d (%s -> %s): %w", id, from, to, err)
 	}
+	slog.Info("swarm task transition", "id", id, "from", from, "to", to, "by", by.Name)
 	return nil
 }
 

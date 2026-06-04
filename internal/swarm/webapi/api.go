@@ -45,7 +45,10 @@ type Backend interface {
 	// Inbound commands. Run is asynchronous — it kicks off a turn whose events
 	// stream back over the WebSocket; the rest are immediate.
 	Run(spaceID, agent, prompt string) error
-	RespondPermission(spaceID, agent, reqID, behavior, reason string) error
+	// RespondPermission delivers an approval reply. A non-empty ruleTool means
+	// the operator picked "Always allow" — add a session-scope allow rule for
+	// that tool so it stops re-prompting for the rest of the session.
+	RespondPermission(spaceID, agent, reqID, behavior, reason, ruleTool string) error
 	RespondQuestion(spaceID, agent, reqID string, answers map[string]string) error
 	Suspend(spaceID, agent string) error
 	Resume(spaceID, agent string) error
@@ -294,6 +297,7 @@ type wsCommand struct {
 	ReqID    string            `json:"reqId"`
 	Behavior string            `json:"behavior"`
 	Reason   string            `json:"reason"`
+	RuleTool string            `json:"ruleTool"` // "Always allow": tool to session-allow ("" = one-shot)
 	Answers  map[string]string `json:"answers"`
 }
 
@@ -306,7 +310,7 @@ func dispatchInbound(b Backend, spaceID string, raw []byte) {
 	case "run":
 		_ = b.Run(spaceID, cmd.Agent, cmd.Prompt)
 	case "respond_permission":
-		_ = b.RespondPermission(spaceID, cmd.Agent, cmd.ReqID, cmd.Behavior, cmd.Reason)
+		_ = b.RespondPermission(spaceID, cmd.Agent, cmd.ReqID, cmd.Behavior, cmd.Reason, cmd.RuleTool)
 	case "respond_question":
 		_ = b.RespondQuestion(spaceID, cmd.Agent, cmd.ReqID, cmd.Answers)
 	}

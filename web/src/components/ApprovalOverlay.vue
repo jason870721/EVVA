@@ -20,6 +20,17 @@ watch(
 function allow() {
   emit('permission', { agent: props.approval.agentId, reqId: props.approval.requestId, behavior: 'allow' })
 }
+// Always allow: approve now AND add a session-scope allow rule for this tool, so
+// the same tool stops re-prompting for the rest of the session (ruleTool carries
+// the tool name through to the backend, which seeds the rule).
+function alwaysAllow() {
+  emit('permission', {
+    agent: props.approval.agentId,
+    reqId: props.approval.requestId,
+    behavior: 'allow',
+    ruleTool: props.approval.tool,
+  })
+}
 function deny() {
   emit('permission', {
     agent: props.approval.agentId,
@@ -51,7 +62,10 @@ function submitAnswers() {
         <p v-if="approval.reason" class="reason">{{ approval.reason }}</p>
         <pre v-if="approval.plan" class="plan">{{ approval.plan }}</pre>
         <div class="row">
-          <button class="primary" @click="allow">Allow</button>
+          <button class="primary" @click="allow">Allow once</button>
+          <button class="primary ghost" @click="alwaysAllow" title="Allow this tool for the rest of the session">
+            Always allow
+          </button>
           <button class="danger" @click="deny">Deny</button>
         </div>
       </template>

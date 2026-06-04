@@ -47,20 +47,28 @@ func TestSetForReturnsOptionPerTool(t *testing.T) {
 	}
 }
 
-// AC#6: write-class tools route through pkg/permission (ask); reads auto-allow.
+// The swarm's coordination tools — including the Leader's task-ledger writes —
+// auto-allow in a non-bypass mode so the leader runs its create→assign→verify
+// loop without a human approval on every dispatch. The leader-only guard is the
+// store's job (store.ErrNotLeader), not the permission gate; the real gated
+// boundary is a Worker's file/shell writes, exercised elsewhere.
 func TestPermissionClassification(t *testing.T) {
 	decide := func(name string) permission.Behavior {
 		return permission.Decide(permission.ToolCall{Name: name}, permission.ModeDefault, nil, permission.Hint{}, "", "").Behavior
 	}
-	for _, n := range []string{toolSendMessage, toolListMembers, toolTaskList, toolMyTasks, toolTaskGet, toolTaskCreate} {
+	autoAllow := []string{
+		toolSendMessage, toolListMembers, toolTaskList, toolMyTasks, toolTaskGet,
+		toolTaskCreate, toolTaskAssign, toolTaskUpdateStatus, toolTaskVerify,
+	}
+	for _, n := range autoAllow {
 		if b := decide(n); b != permission.BehaviorAllow {
-			t.Errorf("%s: behavior = %s, want allow (read/self)", n, b)
+			t.Errorf("%s: behavior = %s, want allow (swarm coordination)", n, b)
 		}
 	}
-	for _, n := range []string{toolTaskAssign, toolTaskUpdateStatus, toolTaskVerify} {
-		if b := decide(n); b != permission.BehaviorAsk {
-			t.Errorf("%s: behavior = %s, want ask (write-class)", n, b)
-		}
+	// A non-swarm write (no safelist entry) still asks — proves we widened the
+	// swarm coordination set, not the gate itself.
+	if b := decide("write"); b != permission.BehaviorAsk {
+		t.Errorf("write: behavior = %s, want ask (worker file writes stay gated)", b)
 	}
 }
 

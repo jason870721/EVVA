@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -73,11 +74,26 @@ func Open(workdir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	// Log the resolved DB path: this is the single most useful line when a
+	// ledger "looks empty" — it pins exactly which vero.db the space writes to,
+	// so an operator inspecting the wrong file (or a stale copy) sees the truth.
+	slog.Info("swarm store opened", "path", path, "journal_mode", "WAL")
 	return s, nil
 }
 
-// Close releases the database handle.
-func (s *Store) Close() error { return s.db.Close() }
+// Close checkpoints the WAL into the main db file, then releases the handle.
+// The explicit TRUNCATE checkpoint matters for debugging: WAL mode writes the
+// schema + rows to vero.db-wal and only folds them into vero.db on a checkpoint
+// (auto-checkpoint needs ~1000 pages, which a small ledger never reaches), so
+// without this an operator who opens vero.db after shutdown can see no schema
+// and no data even though everything was committed. A checkpoint failure is
+// non-fatal — the data is still durable in the WAL.
+func (s *Store) Close() error {
+	if _, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		slog.Warn("swarm store: wal checkpoint on close failed", "err", err)
+	}
+	return s.db.Close()
+}
 
 // migrate applies any embedded migrations whose version is greater than the
 // highest already recorded in schema_migrations. Forward-only for v1; each
@@ -134,6 +150,7 @@ func (s *Store) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit %s: %w", name, err)
 		}
+		slog.Debug("swarm store: migration applied", "version", v, "name", name)
 	}
 	return nil
 }

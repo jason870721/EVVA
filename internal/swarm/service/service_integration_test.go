@@ -198,11 +198,11 @@ func TestRespondPermissionRouting(t *testing.T) {
 	defer svc.Stop()
 	id := registerStub(t, svc)
 
-	if err := svc.RespondPermission("nope", "leader", "r1", "allow", ""); err == nil {
+	if err := svc.RespondPermission("nope", "leader", "r1", "allow", "", ""); err == nil {
 		t.Fatal("RespondPermission on unknown space should error")
 	}
 	// Known agent, unknown request id → the controller's own error (reached it).
-	if err := svc.RespondPermission(id, "leader", "no-such-req", "allow", ""); err == nil {
+	if err := svc.RespondPermission(id, "leader", "no-such-req", "allow", "", ""); err == nil {
 		t.Fatal("RespondPermission with unknown request id should surface the controller error")
 	}
 }

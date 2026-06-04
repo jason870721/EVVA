@@ -30,7 +30,7 @@ go build ./... && go vet ./... \
 | drain B (M4 public seam): busy agent gets mail mid-run | `pkg/agent.TestInboxDrainer_FoldsMidRun` · `swarm.TestInboxDrainerReadsAndMarks` |
 | zero `internal/agent` import (multi-agent oracle) | `scripts/depcheck.sh` (green; 1-12 `pkg/agent` seam is the sanctioned public exception) |
 | tests green: store / bus / scheduler unit + one e2e | `go test -race ./internal/swarm/...` · `service.TestE2E_FullLoop` |
-| security baseline: `127.0.0.1` + session token; dangerous tools via permission | `service.DefaultAddr` = `127.0.0.1:8888` · `webapi.TestTokenGate` (401 w/o token) · `tools` init (write-class task tools default to `ask`, not auto-allow) |
+| security baseline: `127.0.0.1` + session token; dangerous tools via permission | `service.DefaultAddr` = `127.0.0.1:8888` · `webapi.TestTokenGate` (401 w/o token) · `tools` init (worker file/shell writes still gate in non-bypass mode; the leader's task-coordination tools auto-allow so dispatch isn't human-gated — `TestPermissionClassification`) |
 
 ## PRD §3 A1–A11
 

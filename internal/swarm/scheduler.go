@@ -90,6 +90,13 @@ func (s *Supervisor) serve(ctx context.Context, name string, m *memberRun, reaso
 		return // nothing to do — idle burns no tokens
 	}
 
+	reasonStr := "message"
+	if reason == wakeTimer {
+		reasonStr = "timer"
+	}
+	s.log.Debug("swarm serve: member has work",
+		"member", name, "wake", reasonStr, "unread", len(msgIDs), "prompt_bytes", len(prompt))
+
 	// The run-start prompt already folded the whole unread batch (msgIDs) from
 	// the store. Their mailbox hints are still buffered, so clear them now —
 	// otherwise the in-run inbox drainer (drain B) would re-fold the same
@@ -114,6 +121,7 @@ func (s *Supervisor) serve(ctx context.Context, name string, m *memberRun, reaso
 	s.sp.Roster.setRun(name, RunBusy)
 	m.mu.Unlock()
 
+	s.log.Debug("swarm run start", "member", name, "wake", reasonStr)
 	_, err := s.safeRun(runCtx, name, prompt)
 	cancel()
 
@@ -124,6 +132,15 @@ func (s *Supervisor) serve(ctx context.Context, name string, m *memberRun, reaso
 		s.sp.Roster.setRun(name, RunIdle)
 	}
 	m.mu.Unlock()
+
+	// A run that ended in error (incl. a cancelled context — e.g. an approval
+	// that was never answered, or a Suspend) leaves its mail unread for retry.
+	// Surface it: a silently aborted run is the hardest swarm failure to debug.
+	if err != nil {
+		s.log.Warn("swarm run aborted", "member", name, "suspended", suspended, "err", err)
+	} else {
+		s.log.Debug("swarm run end", "member", name, "suspended", suspended, "marked_read", len(msgIDs))
+	}
 
 	// Drain A: a message is consumed (read_at stamped) only after a clean,
 	// finished run. A suspended / panicked / errored run leaves it unread so it
