@@ -3,6 +3,7 @@ package webapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,8 @@ import (
 
 	"golang.org/x/net/websocket"
 )
+
+var errUnknownSpace = errors.New("unknown space")
 
 // fakeBackend is a Backend stub that records inbound commands and returns canned
 // snapshots, so the HTTP/WS layer can be exercised without a live swarm.
@@ -25,8 +28,16 @@ type fakeBackend struct {
 	suspends [][2]string
 }
 
-func (f *fakeBackend) Token() string         { return f.token }
-func (f *fakeBackend) HasSpace(id string) bool { _, ok := f.spaces[id]; return ok }
+func (f *fakeBackend) Token() string           { return f.token }
+func (f *fakeBackend) HasSpace(id string) bool  { _, ok := f.spaces[id]; return ok }
+func (f *fakeBackend) Register(string) (string, error) { return "sp-new", nil }
+func (f *fakeBackend) StopSpace(id string) error {
+	if !f.HasSpace(id) {
+		return errUnknownSpace
+	}
+	delete(f.spaces, id)
+	return nil
+}
 
 func (f *fakeBackend) Spaces() []SpaceInfo {
 	out := make([]SpaceInfo, 0, len(f.spaces))

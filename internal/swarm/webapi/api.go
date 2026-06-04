@@ -23,6 +23,11 @@ type Backend interface {
 	// HasSpace reports whether a space id is registered (the WS subscribe guard).
 	HasSpace(spaceID string) bool
 
+	// Lifecycle. Register brings a space up from a workdir (POST /api/swarms);
+	// StopSpace tears one down (DELETE /api/swarm/:id).
+	Register(workdir string) (string, error)
+	StopSpace(spaceID string) error
+
 	// Read snapshots. The bool is false when the space id is unknown.
 	Spaces() []SpaceInfo
 	Roster(spaceID string) ([]MemberInfo, bool)
@@ -113,6 +118,26 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 	// Read snapshots.
 	mux.Handle("GET /api/swarms", guard(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, b.Spaces())
+	}))
+
+	// Lifecycle: register a space from a workdir / stop one.
+	mux.Handle("POST /api/swarms", guard(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Workdir string `json:"workdir"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		id, err := b.Register(body.Workdir)
+		if err != nil {
+			// Register failures (missing manifest, bad workdir) are client errors.
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+	}))
+	mux.Handle("DELETE /api/swarm/{id}", guard(func(w http.ResponseWriter, r *http.Request) {
+		respondErr(w, b.StopSpace(r.PathValue("id")))
 	}))
 	mux.Handle("GET /api/swarm/{id}", guard(func(w http.ResponseWriter, r *http.Request) {
 		if roster, ok := b.Roster(r.PathValue("id")); ok {
