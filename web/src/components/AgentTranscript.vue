@@ -1,4 +1,6 @@
 <script setup>
+import { agentColor } from '../colors.js'
+
 defineProps({
   agent: { type: String, default: '' },
   transcript: { type: Array, default: () => [] }, // [{role, text}]
@@ -25,9 +27,23 @@ const emit = defineEmits(['close'])
 
     <div class="section">mailbox</div>
     <div class="mail">
-      <div v-for="(m, i) in messages" :key="i" class="letter" :class="{ unread: !m.readAt }">
+      <div
+        v-for="(m, i) in messages"
+        :key="i"
+        class="letter"
+        :class="{ unread: !m.readAt }"
+        :style="{ borderLeftColor: agentColor(m.sender) }"
+      >
         <div class="lhead">
-          <span>{{ m.sender }} → {{ m.recipient }}</span>
+          <span class="route">
+            <span class="who" :style="{ color: agentColor(m.sender) }">
+              <span class="dot" :style="{ background: agentColor(m.sender) }"></span>{{ m.sender }}
+            </span>
+            <span class="arrow">→</span>
+            <span class="who" :style="{ color: agentColor(m.recipient) }">
+              <span class="dot" :style="{ background: agentColor(m.recipient) }"></span>{{ m.recipient }}
+            </span>
+          </span>
           <span v-if="!m.readAt" class="badge">unread</span>
         </div>
         <div v-if="m.subject" class="subj">{{ m.subject }}</div>
@@ -86,18 +102,43 @@ const emit = defineEmits(['close'])
 }
 .letter {
   border: 1px solid var(--line);
+  border-left-width: 3px; /* coloured by sender (inline style) */
   border-radius: 6px;
   padding: 0.4rem 0.5rem;
   background: var(--panel);
 }
 .letter.unread {
-  border-color: var(--accent);
+  border-color: var(--accent); /* inline border-left-color keeps the sender stripe */
 }
 .lhead {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
   font-family: var(--mono);
   font-size: 0.7rem;
+  color: var(--dim);
+}
+.route {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.who {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-weight: 600;
+}
+.dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex: none;
+}
+.arrow {
   color: var(--dim);
 }
 .badge {

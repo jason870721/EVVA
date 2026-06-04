@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import { agentColor } from '../colors.js'
 
 defineProps({
   members: { type: Array, default: () => [] },
@@ -28,7 +29,9 @@ function add() {
         @click="emit('select', m.name)"
       >
         <div class="line1">
-          <span class="name">{{ m.name }}</span>
+          <span class="name">
+            <span class="dot" :style="{ background: agentColor(m.name) }"></span>{{ m.name }}
+          </span>
           <span class="role" :class="m.role">{{ m.role }}</span>
         </div>
         <div class="line2">
@@ -90,6 +93,15 @@ li.sel {
 .name {
   font-weight: 600;
   font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex: none;
 }
 .role {
   font-size: 0.65rem;

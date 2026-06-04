@@ -1,5 +1,6 @@
 <script setup>
 import { ref, nextTick, watch } from 'vue'
+import { agentColor } from '../colors.js'
 
 // A per-member console: the live, focused view of ONE member — its streamed
 // turns and tool calls, plus an input that sends the operator a message to it
@@ -37,7 +38,9 @@ watch(
 <template>
   <div class="console">
     <div class="chead">
-      <span class="who">{{ member || '—' }}</span>
+      <span class="who" :style="{ color: agentColor(member) }">
+        <span class="dot" :style="{ background: agentColor(member) }"></span>{{ member || '—' }}
+      </span>
       <span v-if="role" class="role" :class="role">{{ role }}</span>
       <span v-if="currentTask" class="task">task #{{ currentTask }}</span>
       <span :class="['ws', status]">{{ status }}</span>
@@ -46,7 +49,10 @@ watch(
     <div ref="scroller" class="stream">
       <div v-for="(t, i) in turns" :key="i" :class="['turn', t.type]">
         <div class="meta">
-          <span class="agent">{{ t.type === 'user' ? 'you' : member }}</span>
+          <span
+            class="agent"
+            :style="{ color: t.type === 'user' ? agentColor('user') : agentColor(member) }"
+          >{{ t.type === 'user' ? 'you' : member }}</span>
           <span class="tag">{{ t.type }}</span>
         </div>
         <div v-if="t.type === 'tool'" class="tool">
@@ -87,6 +93,18 @@ watch(
   padding-bottom: 0.5rem;
 }
 .who {
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex: none;
+}
+.agent {
   font-weight: 600;
 }
 .role {
