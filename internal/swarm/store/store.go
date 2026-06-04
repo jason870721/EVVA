@@ -95,6 +95,14 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// RemoveData deletes a space's entire on-disk data dir (<workdir>/.vero): the
+// vero.db ledger and its WAL sidecars, plus runtime.json. A swarm reset calls
+// this after closing the store; the next Open recreates a fresh, migrated db.
+// Best-effort/idempotent — a missing dir is not an error.
+func RemoveData(workdir string) error {
+	return os.RemoveAll(filepath.Join(workdir, veroDir))
+}
+
 // migrate applies any embedded migrations whose version is greater than the
 // highest already recorded in schema_migrations. Forward-only for v1; each
 // file runs in its own transaction.

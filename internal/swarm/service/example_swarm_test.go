@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/johnny1110/evva/internal/swarm/store"
 )
 
 // TestExampleSwarmConstructs guards the shipped example in
@@ -96,5 +98,58 @@ func TestVeroTechSwarmConstructs(t *testing.T) {
 		if role[w] != "worker" {
 			t.Errorf("member %q role = %q, want worker (roster: %v)", w, role[w], role)
 		}
+	}
+}
+
+// TestResetSpace wipes a space's ledger + agent context and rebuilds it under the
+// SAME id (so the operator's URL keeps working). Uses the on-disk example swarm so
+// the reset's manifest re-read has something real to load.
+func TestResetSpace(t *testing.T) {
+	src := filepath.Join("..", "..", "..", "docs", "veronica", "example-swarm")
+	dst := t.TempDir()
+	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
+		t.Fatalf("copy example: %v", err)
+	}
+	svc := New("127.0.0.1:0")
+	svc.loadConfig = scriptedLoadConfig(t.TempDir())
+	defer svc.Stop()
+
+	id, err := svc.Register(dst)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Seed a task so there's ledger state to wipe.
+	ent, ok := svc.entry(id)
+	if !ok {
+		t.Fatal("no entry after register")
+	}
+	if _, err := ent.space.Store.CreateTask(store.Task{Title: "seed", Assignee: "builder", CreatedBy: "lead"}); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if tasks, _ := svc.Tasks(id); len(tasks) != 1 {
+		t.Fatalf("pre-reset tasks = %d, want 1", len(tasks))
+	}
+
+	newID, err := svc.ResetSpace(id)
+	if err != nil {
+		t.Fatalf("ResetSpace: %v", err)
+	}
+	if newID != id {
+		t.Errorf("reset changed the space id: %q -> %q", id, newID)
+	}
+	if !svc.HasSpace(id) {
+		t.Error("space gone after reset; it should be rebuilt under the same id")
+	}
+	tasks, ok := svc.Tasks(id)
+	if !ok {
+		t.Fatal("no tasks view after reset (store not reopened?)")
+	}
+	if len(tasks) != 0 {
+		t.Errorf("post-reset tasks = %d, want 0 (ledger should be wiped)", len(tasks))
+	}
+
+	if _, err := svc.ResetSpace("nope"); err == nil {
+		t.Error("reset of an unknown space should error")
 	}
 }

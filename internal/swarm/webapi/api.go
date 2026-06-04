@@ -24,9 +24,12 @@ type Backend interface {
 	HasSpace(spaceID string) bool
 
 	// Lifecycle. Register brings a space up from a workdir (POST /api/swarms);
-	// StopSpace tears one down (DELETE /api/swarm/:id).
+	// StopSpace tears one down (DELETE /api/swarm/:id); ResetSpace wipes it back
+	// to a blank slate — fresh ledger + cleared agent context — under the SAME id
+	// (POST /api/swarm/:id/reset). ResetSpace returns the (unchanged) space id.
 	Register(workdir string) (string, error)
 	StopSpace(spaceID string) error
+	ResetSpace(spaceID string) (string, error)
 
 	// Read snapshots. The bool is false when the space id is unknown.
 	Spaces() []SpaceInfo
@@ -151,6 +154,14 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 	}))
 	mux.Handle("DELETE /api/swarm/{id}", guard(func(w http.ResponseWriter, r *http.Request) {
 		respondErr(w, b.StopSpace(r.PathValue("id")))
+	}))
+	mux.Handle("POST /api/swarm/{id}/reset", guard(func(w http.ResponseWriter, r *http.Request) {
+		id, err := b.ResetSpace(r.PathValue("id"))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": id})
 	}))
 	mux.Handle("GET /api/swarm/{id}", guard(func(w http.ResponseWriter, r *http.Request) {
 		if roster, ok := b.Roster(r.PathValue("id")); ok {

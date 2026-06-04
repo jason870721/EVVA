@@ -13,6 +13,7 @@ import (
 	"github.com/johnny1110/evva/internal/swarm/store"
 	"github.com/johnny1110/evva/internal/swarm/webapi"
 	"github.com/johnny1110/evva/pkg/agent"
+	"github.com/johnny1110/evva/pkg/common"
 	"github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/constant"
 	"github.com/johnny1110/evva/pkg/llm"
@@ -79,7 +80,7 @@ func stubLoaded() []agentdef.Loaded {
 // registerStub brings a stub-LLM space up through the real register() core.
 func registerStub(t *testing.T, s *Service) string {
 	t.Helper()
-	id, err := s.register(stubManifest(), stubLoaded(), stubConfig(t))
+	id, err := s.register(common.GenUUID(), stubManifest(), stubLoaded(), stubConfig(t))
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}

@@ -18,6 +18,7 @@ import (
 //	evva swarm .              register ./evva-swarm.yml as a new isolated space
 //	evva swarm ls             list registered spaces
 //	evva swarm stop <id>      stop one space
+//	evva swarm reset <id>     wipe a space (fresh ledger + cleared context), same id
 //	evva swarm add <id> <m>   hot-load member <m> into space <id> (M3)
 //
 // The bare `evva` (TUI) path is untouched.
@@ -30,7 +31,7 @@ func runSwarm(args []string) {
 	var err error
 	switch sub {
 	case "":
-		exitf(2, "usage: evva swarm . | ls | stop <id> | add <id> <member>")
+		exitf(2, "usage: evva swarm . | ls | stop <id> | reset <id> | add <id> <member>")
 	case ".":
 		err = swarmRegister(os.Stdout)
 	case "ls":
@@ -40,13 +41,18 @@ func runSwarm(args []string) {
 			exitf(2, "usage: evva swarm stop <id>")
 		}
 		err = swarmStop(os.Stdout, args[1])
+	case "reset":
+		if len(args) < 2 {
+			exitf(2, "usage: evva swarm reset <id>")
+		}
+		err = swarmReset(os.Stdout, args[1])
 	case "add":
 		if len(args) < 3 {
 			exitf(2, "usage: evva swarm add <space-id> <member>")
 		}
 		err = swarmAdd(os.Stdout, args[1], args[2])
 	default:
-		exitf(2, "evva swarm: unknown subcommand %q (want . | ls | stop | add)", sub)
+		exitf(2, "evva swarm: unknown subcommand %q (want . | ls | stop | reset | add)", sub)
 	}
 	if err != nil {
 		exitf(1, "evva swarm %s: %v", sub, err)
@@ -108,6 +114,21 @@ func swarmStop(out io.Writer, id string) error {
 		return err
 	}
 	fmt.Fprintf(out, "stopped space %s\n", id)
+	return nil
+}
+
+// swarmReset wipes a space back to a blank slate — fresh task ledger and cleared
+// agent context — and brings it back up under the SAME id, so the existing URL
+// keeps working. Destructive: all tasks, messages, and transcripts are gone.
+func swarmReset(out io.Writer, id string) error {
+	var reply struct {
+		ID string `json:"id"`
+	}
+	if err := serviceClient("POST", "/api/swarm/"+id+"/reset", nil, &reply); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "reset space %s — fresh task ledger + cleared agent context\n", reply.ID)
+	fmt.Fprintf(out, "  open: http://%s/?space=%s\n", targetAddr(), reply.ID)
 	return nil
 }
 

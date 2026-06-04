@@ -33,6 +33,7 @@ import (
 	"github.com/johnny1110/evva/internal/swarm/store"
 	swarmtools "github.com/johnny1110/evva/internal/swarm/tools"
 	"github.com/johnny1110/evva/internal/swarm/webapi"
+	"github.com/johnny1110/evva/pkg/agent"
 	"github.com/johnny1110/evva/pkg/common"
 	"github.com/johnny1110/evva/pkg/config"
 	"github.com/johnny1110/evva/pkg/ui"
@@ -222,33 +223,43 @@ func (s *Service) Addr() string {
 // space up as a new isolated member of the registry. Returns the generated
 // space id. This is the production path the `evva swarm .` CLI (SPRD-1-9) calls.
 func (s *Service) Register(workdir string) (string, error) {
+	m, loaded, cfg, err := s.loadSpace(workdir)
+	if err != nil {
+		return "", err
+	}
+	return s.register(common.GenUUID(), m, loaded, cfg)
+}
+
+// loadSpace resolves a workdir to its parsed manifest, built agent definitions,
+// and per-space config — the read-only half of bring-up, shared by Register and
+// ResetSpace (which rebuilds the same workdir under its existing id).
+func (s *Service) loadSpace(workdir string) (agentdef.Manifest, []agentdef.Loaded, *config.Config, error) {
 	abs, err := filepath.Abs(workdir)
 	if err != nil {
-		return "", fmt.Errorf("swarm: resolve workdir %q: %w", workdir, err)
+		return agentdef.Manifest{}, nil, nil, fmt.Errorf("swarm: resolve workdir %q: %w", workdir, err)
 	}
 	cfg, err := s.loadConfig(abs)
 	if err != nil {
-		return "", fmt.Errorf("swarm: load config for %q: %w", abs, err)
+		return agentdef.Manifest{}, nil, nil, fmt.Errorf("swarm: load config for %q: %w", abs, err)
 	}
 	m, err := agentdef.LoadManifest(filepath.Join(abs, manifestFile))
 	if err != nil {
-		return "", err
+		return agentdef.Manifest{}, nil, nil, err
 	}
 	loaded, warnings, err := agentdef.NewLoader().BuildAll(abs, m)
 	if err != nil {
-		return "", err
+		return agentdef.Manifest{}, nil, nil, err
 	}
 	for _, w := range warnings {
 		s.log.Warn("swarm: agent load warning", "agent", w.Agent, "msg", w.Msg)
 	}
-	return s.register(m, loaded, cfg)
+	return m, loaded, cfg, nil
 }
 
 // register is the shared bring-up core: assemble the space, start its
 // supervisor and event pump under a fresh child context, and add it to the
 // registry. Split out so tests can register a stub-LLM space without disk/env.
-func (s *Service) register(m agentdef.Manifest, loaded []agentdef.Loaded, cfg *config.Config) (string, error) {
-	id := common.GenUUID()
+func (s *Service) register(id string, m agentdef.Manifest, loaded []agentdef.Loaded, cfg *config.Config) (string, error) {
 	sp, err := swarm.NewSpace(id, m, loaded, swarmtools.Set{}, cfg)
 	if err != nil {
 		return "", err
@@ -293,6 +304,55 @@ func (s *Service) StopSpace(id string) error {
 	s.persistSpaces() // a deliberate stop drops it from the reconcile set
 	s.log.Info("swarm: space stopped", "id", id)
 	return nil
+}
+
+// ResetSpace wipes a space back to a blank slate and brings it back up under the
+// SAME id: it tears the live space down, deletes its .vero ledger (tasks +
+// messages + membership) and every member's persisted transcript, then rebuilds
+// fresh from the (re-read) manifest. The operator's space id / URL stays valid.
+//
+// A beta-stage operator tool, and deliberately destructive: all task history,
+// messages, and agent context for the space are gone. The manifest is re-read and
+// validated up front so a broken workdir fails the reset BEFORE the live space is
+// torn down — reset never leaves the operator with no space.
+func (s *Service) ResetSpace(id string) (string, error) {
+	s.mu.RLock()
+	ent, ok := s.spaces[id]
+	s.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("swarm: unknown space %q", id)
+	}
+	workdir := ent.space.Workdir
+
+	m, loaded, cfg, err := s.loadSpace(workdir)
+	if err != nil {
+		return "", fmt.Errorf("swarm: reset %q: %w", id, err)
+	}
+
+	// Tear the live space down (cancels in-flight runs, shuts agents, closes the
+	// DB so its files are free to delete) and drop it from the registry.
+	s.mu.Lock()
+	delete(s.spaces, id)
+	s.mu.Unlock()
+	teardownSpace(ent)
+
+	// Wipe durable state so the rebuild is truly blank: the .vero ledger, then
+	// every member's transcript under <AppHome>/sessions/<workdir-slug>/ (via the
+	// public pkg/agent seam — the swarm never reaches the session store directly).
+	if err := store.RemoveData(workdir); err != nil {
+		s.log.Warn("swarm: reset: remove .vero", "id", id, "err", err)
+	}
+	if err := agent.ResetWorkdirSessions(cfg.AppHome, workdir); err != nil {
+		s.log.Warn("swarm: reset: clear sessions", "id", id, "err", err)
+	}
+
+	// Rebuild fresh under the same id (NewSpace re-opens a migrated db; Reload
+	// finds nothing to resume, so every member starts with empty context).
+	if _, err := s.register(id, m, loaded, cfg); err != nil {
+		return "", fmt.Errorf("swarm: reset %q: rebuild failed: %w", id, err)
+	}
+	s.log.Info("swarm: space reset", "id", id, "workdir", workdir)
+	return id, nil
 }
 
 // spacesFile is the persisted reconcile manifest path, or "" when persistence
