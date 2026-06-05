@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { agentColor } from '../colors.js'
+import { displayPhase, phaseClass } from '../events.js'
 
 defineProps({
   members: { type: Array, default: () => [] },
@@ -36,7 +37,7 @@ function add() {
         </div>
         <div class="line2">
           <span :class="['badge', m.membership]">{{ m.membership }}</span>
-          <span :class="['badge', 'run-' + m.run]">{{ m.run }}</span>
+          <span :class="['badge', 'phase-' + phaseClass(m)]" :title="displayPhase(m)">{{ displayPhase(m) }}</span>
           <span v-if="m.currentTask" class="task">#{{ m.currentTask }}</span>
         </div>
         <div class="ctl" @click.stop>
@@ -126,8 +127,12 @@ li.sel {
 }
 .badge.active { color: #22c55e; border-color: #22c55e55; }
 .badge.frozen { color: #60a5fa; border-color: #60a5fa55; }
-.badge.run-busy { color: #f59e0b; border-color: #f59e0b55; }
-.badge.run-suspended { color: #ef4444; border-color: #ef444455; }
+.badge.phase-busy { color: #f59e0b; border-color: #f59e0b55; }
+.badge.phase-suspended { color: #ef4444; border-color: #ef444455; }
+/* waiting-approval / waiting-input demands operator action — make it loud. */
+.badge.phase-waiting { color: #a855f7; border-color: #a855f7; font-weight: 600; }
+.badge.phase-error { color: #ef4444; border-color: #ef444455; }
+.badge.phase-idle { color: var(--dim); }
 .task {
   font-family: var(--mono);
   font-size: 0.65rem;

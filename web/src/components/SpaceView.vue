@@ -20,8 +20,14 @@ const tasks = ref([])
 const messages = ref([])
 const chat = ref([])
 const wsStatus = ref('connecting')
-const approval = ref(null)
-const question = ref(null)
+// Pending gates are QUEUES, not single slots: in a swarm several members can
+// block on approval at once, and a single ref would let the second event clobber
+// the first — stranding the first member's blocked tool with no way to answer it
+// (RP-2 §3.2). We surface the head of each queue and keep the rest behind it.
+const approvals = ref([])
+const questions = ref([])
+const approval = computed(() => approvals.value[0] || null)
+const question = computed(() => questions.value[0] || null)
 const focused = ref('') // the member whose console is in the center pane
 const selected = ref('') // the member whose transcript+mailbox is in the right pane
 const transcript = ref([])
@@ -61,16 +67,33 @@ async function refreshSnapshots() {
 }
 
 function onEvent(ev) {
+  // A command_error frame is the backend telling us an inbound command (e.g. an
+  // approval reply) failed to route, instead of silently dropping it. Surface it.
+  if (ev && ev.type === 'command_error') {
+    err.value = ev.message || 'command failed'
+    return
+  }
   if (isApproval(ev)) {
-    approval.value = approvalOf(ev)
+    enqueueGate(approvals, approvalOf(ev))
     return
   }
   if (isQuestion(ev)) {
-    question.value = questionOf(ev)
+    enqueueGate(questions, questionOf(ev))
     return
   }
   chat.value = [...reduceChat(chat.value, ev)]
   if (touchesLedger(ev)) refreshSnapshots()
+}
+
+// enqueueGate appends a pending gate, de-duped by (agentId, requestId) so a
+// re-delivered event (reconnect replay, double WS) can't double-queue it.
+function enqueueGate(queue, g) {
+  if (!queue.value.some((x) => x.agentId === g.agentId && x.requestId === g.requestId)) {
+    queue.value = [...queue.value, g]
+  }
+}
+function dequeueGate(queue, agent, reqId) {
+  queue.value = queue.value.filter((x) => !(x.agentId === agent && x.requestId === reqId))
 }
 
 async function send(text) {
@@ -97,11 +120,12 @@ function onPermission(d) {
       reason: d.reason || '',
       ruleTool: d.ruleTool || '', // non-empty on "Always allow" → backend seeds a session rule
     })
-  approval.value = null
+  // Remove only the answered gate; the next queued one surfaces automatically.
+  dequeueGate(approvals, d.agent, d.reqId)
 }
 function onQuestion(d) {
   sock && sock.send({ type: 'respond_question', agent: d.agent, reqId: d.reqId, answers: d.answers })
-  question.value = null
+  dequeueGate(questions, d.agent, d.reqId)
 }
 
 async function memberCmd(verb, name) {
@@ -127,8 +151,8 @@ async function resetSpace() {
     await props.api.reset(props.space.id)
     chat.value = []
     transcript.value = []
-    approval.value = null
-    question.value = null
+    approvals.value = []
+    questions.value = []
     selected.value = ''
     focused.value = ''
     await refreshSnapshots()
@@ -150,13 +174,29 @@ async function selectMember(name) {
   }
 }
 
+// hydratePending re-renders overlays for gates raised before we connected (or
+// during a reconnect gap): the service replays the outstanding approval/question
+// events, and onEvent enqueues them (de-duped), so a blocked member is always
+// answerable (RP-2 §3.3).
+async function hydratePending() {
+  try {
+    const gates = await props.api.pending(props.space.id)
+    for (const ev of gates || []) onEvent(ev)
+  } catch {
+    /* non-fatal — the live stream still delivers new gates */
+  }
+}
+
 onMounted(async () => {
   await refreshSnapshots()
   sock = openSocket({
     token: props.token,
     spaceId: props.space.id,
     onEvent,
-    onStatus: (s) => (wsStatus.value = s),
+    onStatus: (s) => {
+      wsStatus.value = s
+      if (s === 'open') hydratePending() // catch gates raised before/while disconnected
+    },
   })
   poll = setInterval(refreshSnapshots, 2500)
 })
@@ -222,6 +262,7 @@ onBeforeUnmount(() => {
     <ApprovalOverlay
       :approval="approval"
       :question="question"
+      :pending-count="approvals.length + questions.length"
       @permission="onPermission"
       @question="onQuestion"
     />

@@ -208,6 +208,45 @@ func TestRespondPermissionRouting(t *testing.T) {
 	}
 }
 
+// RP-2 §3.1 regression: the browser echoes back the event's AgentID (a random
+// UUID), not the member name, when answering an approval. Before the fix the
+// service resolved the controller by name only, so the UUID never matched and
+// every web-driven approval reply was silently dropped — the blocked tool hung
+// forever. This proves an approval addressed by AgentID now reaches the
+// controller. (The existing test above covers the name path.)
+func TestRespondPermissionRoutesByAgentID(t *testing.T) {
+	svc := New("127.0.0.1:0")
+	defer svc.Stop()
+	id := registerStub(t, svc)
+
+	// Resolve the leader's AgentID the way the browser does — from the roster
+	// snapshot (MemberInfo.AgentID == ctl.AgentID()).
+	members, ok := svc.Roster(id)
+	if !ok {
+		t.Fatal("roster snapshot for a known space should exist")
+	}
+	var agentID string
+	for _, m := range members {
+		if m.Name == "leader" {
+			agentID = m.AgentID
+		}
+	}
+	if agentID == "" {
+		t.Fatal("leader has no AgentID in the roster snapshot")
+	}
+
+	// Unknown request id, but addressed by AgentID: the error must be the
+	// controller's ("no pending request"), proving it routed — NOT the routing
+	// miss ("unknown space/agent") the bug produced.
+	err := svc.RespondPermission(id, agentID, "no-such-req", "allow", "", "")
+	if err == nil {
+		t.Fatal("unknown request id should still surface the controller's error")
+	}
+	if strings.Contains(err.Error(), "unknown space/agent") {
+		t.Fatalf("approval addressed by AgentID failed to route (routing miss): %v", err)
+	}
+}
+
 // --- helpers --------------------------------------------------------------
 
 func getJSON(t *testing.T, url string, v any) {

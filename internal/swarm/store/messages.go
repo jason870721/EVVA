@@ -22,7 +22,8 @@ var (
 )
 
 // Message is one durable row in the message store. ReadAt is nil while unread.
-// Times are unix millis.
+// ClaimedAt is nil unless the message is currently folded into an in-flight run
+// (the unread→claimed→read lifecycle; see migration 0002). Times are unix millis.
 type Message struct {
 	ID        string
 	Sender    string
@@ -31,10 +32,11 @@ type Message struct {
 	Body      string
 	RefTask   *int64
 	ReadAt    *int64
+	ClaimedAt *int64
 	CreatedAt int64
 }
 
-const msgCols = `id, sender, recipient, subject, body, ref_task, read_at, created_at`
+const msgCols = `id, sender, recipient, subject, body, ref_task, read_at, claimed_at, created_at`
 
 // PutMessage durably stores a message. The caller supplies the id (a UUID; see
 // pkg/common.GenUUID). CreatedAt defaults to now when zero.
@@ -151,12 +153,13 @@ func (s *Store) ListMessages(limit int) ([]Message, error) {
 // scanMessage reads one message row from a *sql.Row or *sql.Rows.
 func scanMessage(sc rowScanner) (Message, error) {
 	var (
-		m       Message
-		subject sql.NullString
-		refTask sql.NullInt64
-		readAt  sql.NullInt64
+		m         Message
+		subject   sql.NullString
+		refTask   sql.NullInt64
+		readAt    sql.NullInt64
+		claimedAt sql.NullInt64
 	)
-	if err := sc.Scan(&m.ID, &m.Sender, &m.Recipient, &subject, &m.Body, &refTask, &readAt, &m.CreatedAt); err != nil {
+	if err := sc.Scan(&m.ID, &m.Sender, &m.Recipient, &subject, &m.Body, &refTask, &readAt, &claimedAt, &m.CreatedAt); err != nil {
 		return Message{}, err
 	}
 	m.Subject = subject.String
@@ -167,6 +170,10 @@ func scanMessage(sc rowScanner) (Message, error) {
 	if readAt.Valid {
 		v := readAt.Int64
 		m.ReadAt = &v
+	}
+	if claimedAt.Valid {
+		v := claimedAt.Int64
+		m.ClaimedAt = &v
 	}
 	return m, nil
 }
@@ -196,4 +203,120 @@ func (s *Store) UnreadFor(recipient string) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// ClaimUnread atomically claims every currently unread+unclaimed message for a
+// recipient (oldest first) and returns the full rows — the run-start batch
+// (drain A). "Claimed" means folded into an in-flight run: read_at stays NULL
+// (so a crash leaves it recoverable), claimed_at marks it in-flight (so drain B
+// won't re-fold it). The SELECT and UPDATE are consistent because the store
+// serialises all writes under mu — no PutMessage can insert between them — so the
+// returned set is exactly the set claimed. A clean run later calls SettleClaimed;
+// an aborted one calls UnclaimFor. Returns a non-nil empty slice when none.
+func (s *Store) ClaimUnread(recipient string) ([]Message, error) {
+	now := time.Now().UnixMilli()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(
+		`SELECT `+msgCols+` FROM messages WHERE recipient = ? AND read_at IS NULL AND claimed_at IS NULL ORDER BY created_at, id`,
+		recipient,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: claim unread for %s: %w", recipient, err)
+	}
+	out := make([]Message, 0)
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: scan claim: %w", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(out) == 0 {
+		return out, nil
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE messages SET claimed_at = ? WHERE recipient = ? AND read_at IS NULL AND claimed_at IS NULL`,
+		now, recipient,
+	); err != nil {
+		return nil, fmt.Errorf("store: claim unread update for %s: %w", recipient, err)
+	}
+	for i := range out {
+		out[i].ClaimedAt = &now
+	}
+	return out, nil
+}
+
+// ClaimOne claims a single message by id for drain B (the mid-run fold), iff it
+// is still unread AND unclaimed. ok=false means it was already folded (claimed by
+// the start batch or an earlier drain-B poll), already read, or gone — the
+// caller skips it, which is exactly the dedup that stops a message being folded
+// twice. A claimed message settles to read on the run's clean end, or resets to
+// unread on abort.
+func (s *Store) ClaimOne(id string) (Message, bool, error) {
+	now := time.Now().UnixMilli()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.db.Exec(
+		`UPDATE messages SET claimed_at = ? WHERE id = ? AND read_at IS NULL AND claimed_at IS NULL`,
+		now, id,
+	)
+	if err != nil {
+		return Message{}, false, fmt.Errorf("store: claim one %s: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Message{}, false, nil // not claimable — already folded/read/missing
+	}
+	m, err := scanMessage(s.db.QueryRow(`SELECT `+msgCols+` FROM messages WHERE id = ?`, id))
+	if err != nil {
+		return Message{}, false, fmt.Errorf("store: claim one fetch %s: %w", id, err)
+	}
+	return m, true, nil
+}
+
+// SettleClaimed stamps read_at on every message a recipient claimed during a run
+// that has now finished cleanly — the start batch plus anything drain B folded.
+// This is the single mark-read point (drain A and drain B both flow through it),
+// so the two drains can never disagree about when a message becomes read.
+func (s *Store) SettleClaimed(recipient string) error {
+	now := time.Now().UnixMilli()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.db.Exec(
+		`UPDATE messages SET read_at = ? WHERE recipient = ? AND claimed_at IS NOT NULL AND read_at IS NULL`,
+		now, recipient,
+	); err != nil {
+		return fmt.Errorf("store: settle claimed for %s: %w", recipient, err)
+	}
+	return nil
+}
+
+// UnclaimFor resets a recipient's in-flight claims back to unread — called when a
+// run aborts (suspend / cancel / error) so the mail retries on resume, and on
+// restart so a claim left dangling by a crashed run is recovered. Read messages
+// are untouched.
+func (s *Store) UnclaimFor(recipient string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.db.Exec(
+		`UPDATE messages SET claimed_at = NULL WHERE recipient = ? AND read_at IS NULL AND claimed_at IS NOT NULL`,
+		recipient,
+	); err != nil {
+		return fmt.Errorf("store: unclaim for %s: %w", recipient, err)
+	}
+	return nil
 }

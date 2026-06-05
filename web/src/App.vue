@@ -50,12 +50,12 @@ onMounted(loadSpaces)
   <!-- Token gate: the service prints the session token on `evva service start`. -->
   <div v-if="!token" class="gate">
     <h1>evva · swarm</h1>
-    <p class="dim">Paste the session token printed by <code>evva service start</code>.</p>
+    <p class="dim">Enter the session token. Default while in development: <code>root</code>.</p>
     <div class="row">
       <input
         v-model="tokenDraft"
         type="password"
-        placeholder="session token"
+        placeholder="session token (default: root)"
         @keyup.enter="saveToken"
       />
       <button class="primary" @click="saveToken">Connect</button>

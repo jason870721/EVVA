@@ -41,6 +41,10 @@ func newSendMessage(mc swarm.MemberContext) pubtools.Tool {
 				return errf("send_message: both 'to' and 'body' are required"), nil
 			}
 
+			// Role-addressing (§3.5): a bare role like "leader" resolves to that
+			// role's unique member name, so the model needn't know it's "lead"/"pm".
+			in.To = mc.Space.Roster.ResolveRecipient(in.To)
+
 			// Validate the recipient against the live roster (the "all" broadcast
 			// is exempt). Without this, a wrong name is silently dead-lettered (see
 			// rosterHas). Surfacing a correctable error with the real names lets the
@@ -86,7 +90,10 @@ func newListMembers(mc swarm.MemberContext) pubtools.Tool {
 			var b strings.Builder
 			fmt.Fprintf(&b, "Swarm members (%d):\n", len(members))
 			for _, m := range members {
-				fmt.Fprintf(&b, "- %s [%s] %s/%s", m.Name, m.Role, m.Membership, m.Run)
+				// DisplayPhase shows the fine event-derived sub-phase (e.g.
+				// "executing:bash", "waiting-approval:bash") so a teammate can see
+				// what a member is actually doing, not just that it is "busy".
+				fmt.Fprintf(&b, "- %s [%s] %s/%s", m.Name, m.Role, m.Membership, m.DisplayPhase())
 				if m.CurrentTask != 0 {
 					fmt.Fprintf(&b, " task#%d", m.CurrentTask)
 				}

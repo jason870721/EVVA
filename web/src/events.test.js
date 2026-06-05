@@ -8,6 +8,8 @@ import {
   questionOf,
   isApproval,
   consoleTurns,
+  displayPhase,
+  phaseClass,
   TASK_STATES,
 } from './events.js'
 
@@ -155,4 +157,22 @@ test('approvalOf and questionOf normalise the gate payloads', () => {
   })
   assert.equal(q.requestId, 'q1')
   assert.equal(q.questions.length, 1)
+})
+
+test('displayPhase composes coarse run + fine phase (RP-3)', () => {
+  assert.equal(displayPhase({ run: 'busy', phase: 'executing', tool: 'bash' }), 'executing:bash')
+  assert.equal(displayPhase({ run: 'busy', phase: 'waiting-approval', tool: 'bash' }), 'waiting-approval:bash')
+  assert.equal(displayPhase({ run: 'busy', phase: 'thinking' }), 'thinking')
+  assert.equal(displayPhase({ run: 'idle', phase: 'ready' }), 'ready')
+  // coarse "suspended" wins even if the deriver moved the phase on after cancel.
+  assert.equal(displayPhase({ run: 'suspended', phase: 'ready' }), 'suspended')
+  // empty phase falls back to coarse run.
+  assert.equal(displayPhase({ run: 'busy', phase: '' }), 'busy')
+})
+
+test('phaseClass flags waiting-approval distinctly', () => {
+  assert.equal(phaseClass({ run: 'busy', phase: 'waiting-approval' }), 'waiting')
+  assert.equal(phaseClass({ run: 'busy', phase: 'executing' }), 'busy')
+  assert.equal(phaseClass({ run: 'suspended', phase: 'ready' }), 'suspended')
+  assert.equal(phaseClass({ run: 'idle', phase: 'ready' }), 'idle')
 })

@@ -22,8 +22,9 @@ type fakeController struct {
 	ui.Controller
 	runs     atomic.Int32
 	inFlight atomic.Int32
-	block    bool // Run blocks until ctx is cancelled (models a long run)
-	doPanic  bool // Run panics every time (models a crashing agent)
+	block    bool                // Run blocks until ctx is cancelled (models a long run)
+	doPanic  bool                // Run panics every time (models a crashing agent)
+	onRun    func(prompt string) // optional: invoked inside Run (e.g. to inject mid-run mail)
 
 	mu      sync.Mutex
 	prompts []string
@@ -38,6 +39,9 @@ func (f *fakeController) Run(ctx context.Context, prompt string) (string, error)
 	f.prompts = append(f.prompts, prompt)
 	f.mu.Unlock()
 
+	if f.onRun != nil {
+		f.onRun(prompt)
+	}
 	if f.doPanic {
 		panic("fake controller boom")
 	}
@@ -138,6 +142,38 @@ func TestMessageWakeRunsAndMarksRead(t *testing.T) {
 	waitFor(t, time.Second, "message marked read", func() bool {
 		m, err := sp.Store.GetMessage(uuid)
 		return err == nil && m.ReadAt != nil
+	})
+}
+
+// RP-1 regression: a message that arrives DURING a run (after the run-start
+// claim snapshot) must still be processed and read — never stranded unread the
+// way the old drainStaleHints over-clear could leave it. The fake controllers
+// have no drain B, so ONLY the level-triggered re-check (serve loops until the
+// store reports no unread) can catch the second message — which is exactly the
+// property under test.
+func TestLevelTriggeredDrainCatchesMidRunMail(t *testing.T) {
+	sp, ctls := ctlSpace(t, map[string]agentdef.Role{"w": agentdef.RoleWorker})
+	fc := ctls["w"]
+	var injected atomic.Bool
+	fc.onRun = func(string) {
+		// On the first run only, deliver a second message — modelling mail that
+		// lands while w is busy, after drain A already claimed the first.
+		if injected.CompareAndSwap(false, true) {
+			_, _ = sp.Bus.Send(store.Message{Sender: "leader", Recipient: "w", Body: "second"})
+		}
+	}
+	startSup(t, sp)
+
+	if _, err := sp.Bus.Send(store.Message{Sender: "leader", Recipient: "w", Body: "first"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	// w must run a second time for the mid-run message…
+	waitFor(t, 2*time.Second, "w runs twice", func() bool { return fc.runs.Load() >= 2 })
+	// …and nothing is left unread (both first and second settled to read).
+	waitFor(t, 2*time.Second, "no unread mail left", func() bool {
+		ids, err := sp.Store.UnreadFor("w")
+		return err == nil && len(ids) == 0
 	})
 }
 

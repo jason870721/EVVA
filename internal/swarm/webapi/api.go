@@ -37,6 +37,10 @@ type Backend interface {
 	Tasks(spaceID string) ([]TaskInfo, bool)
 	Messages(spaceID string) ([]MessageInfo, bool)
 	Transcript(spaceID, agent string) ([]TranscriptEntry, bool)
+	// PendingGates returns the space's outstanding approval/question gates as raw
+	// wire events (same shape the WS sends), so a reconnecting browser re-renders
+	// overlays for members still blocked instead of leaving them hung (RP-2 §3.3).
+	PendingGates(spaceID string) ([]any, bool)
 
 	// SendUserMessage delivers an operator message onto a member's mailbox as
 	// sender "user" (or broadcasts when to == "all"). It rides the same bus +
@@ -77,7 +81,9 @@ type MemberInfo struct {
 	AgentID     string `json:"agentId"`
 	Role        string `json:"role"`
 	Membership  string `json:"membership"`
-	Run         string `json:"run"`
+	Run         string `json:"run"`             // coarse lifecycle: idle | busy | suspended
+	Phase       string `json:"phase,omitempty"` // fine, event-derived sub-phase (RP-3)
+	Tool        string `json:"tool,omitempty"`  // tool name for executing / waiting-approval
 	CurrentTask int64  `json:"currentTask"`
 	WhenToUse   string `json:"whenToUse,omitempty"`
 }
@@ -191,6 +197,13 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 			http.Error(w, "unknown space or agent", http.StatusNotFound)
 		}
 	}))
+	mux.Handle("GET /api/swarm/{id}/pending", guard(func(w http.ResponseWriter, r *http.Request) {
+		if gates, ok := b.PendingGates(r.PathValue("id")); ok {
+			writeJSON(w, http.StatusOK, gates)
+		} else {
+			http.Error(w, "unknown space", http.StatusNotFound)
+		}
+	}))
 
 	// Command endpoints (REST mirror of the WS inbound channel).
 	mux.Handle("POST /api/agents/{name}/run", guard(func(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +307,13 @@ func serveSocket(b Backend, hub *Hub, ws *websocket.Conn) {
 		if err := websocket.Message.Receive(ws, &raw); err != nil {
 			return // EOF / closed
 		}
-		dispatchInbound(b, spaceID, []byte(raw))
+		if err := dispatchInbound(b, spaceID, []byte(raw)); err != nil {
+			// A command that failed to route (e.g. an approval reply that hit no
+			// controller) must NOT be swallowed — that is exactly how a blocked
+			// agent hangs invisibly. Echo it back so the browser can surface it.
+			// Use c.send so it serialises against the hub's concurrent writes.
+			_ = c.send(commandErrorFrame(err))
+		}
 	}
 }
 
@@ -312,19 +331,32 @@ type wsCommand struct {
 	Answers  map[string]string `json:"answers"`
 }
 
-func dispatchInbound(b Backend, spaceID string, raw []byte) {
+// dispatchInbound routes one inbound WS command. A malformed frame is ignored
+// (nil); a command that ran but failed returns its error so serveSocket can echo
+// it back to the browser instead of silently dropping it.
+func dispatchInbound(b Backend, spaceID string, raw []byte) error {
 	var cmd wsCommand
 	if err := json.Unmarshal(raw, &cmd); err != nil {
-		return
+		return nil // not a command we can act on; ignore the frame
 	}
 	switch cmd.Type {
 	case "run":
-		_ = b.Run(spaceID, cmd.Agent, cmd.Prompt)
+		return b.Run(spaceID, cmd.Agent, cmd.Prompt)
 	case "respond_permission":
-		_ = b.RespondPermission(spaceID, cmd.Agent, cmd.ReqID, cmd.Behavior, cmd.Reason, cmd.RuleTool)
+		return b.RespondPermission(spaceID, cmd.Agent, cmd.ReqID, cmd.Behavior, cmd.Reason, cmd.RuleTool)
 	case "respond_question":
-		_ = b.RespondQuestion(spaceID, cmd.Agent, cmd.ReqID, cmd.Answers)
+		return b.RespondQuestion(spaceID, cmd.Agent, cmd.ReqID, cmd.Answers)
 	}
+	return nil
+}
+
+// commandErrorFrame is the JSON pushed back to the browser when an inbound WS
+// command fails to apply. type:"command_error" is distinct from the event
+// envelope, so the existing event reducers ignore it; a future UI can surface it
+// (e.g. "approval failed to route — retry").
+func commandErrorFrame(err error) []byte {
+	b, _ := json.Marshal(map[string]string{"type": "command_error", "message": err.Error()})
+	return b
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

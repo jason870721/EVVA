@@ -28,7 +28,8 @@ type Supervisor struct {
 	store *store.Store
 	log   *slog.Logger
 
-	tickInterval time.Duration
+	tickInterval   time.Duration
+	rescanInterval time.Duration
 
 	// mu guards members + each member's schedule/nextDue (only the tick touches
 	// those). A member's volatile run state (suspended/cancelRun) is guarded by
@@ -43,6 +44,13 @@ type Supervisor struct {
 // catches minute-resolution cron and short interval schedules; tests shrink it.
 const defaultTickInterval = time.Second
 
+// defaultRescanInterval is how often the safety re-scan (rescanTick) pokes idle
+// members that the store says still have unread mail — the backstop for a wake
+// hint that was dropped entirely (so a member was never woken at all, which the
+// level-triggered drain can't catch on its own). Coarse on purpose: it only ever
+// converts a permanent stall into a ≤interval delay; tests shrink it.
+const defaultRescanInterval = 8 * time.Second
+
 // NewSupervisor builds a supervisor over an assembled space. Call Start to bring
 // the run loops up.
 func NewSupervisor(sp *SwarmSpace) *Supervisor {
@@ -54,9 +62,10 @@ func NewSupervisor(sp *SwarmSpace) *Supervisor {
 		// log) rather than io.Discard, so a swarm runs observable out of the
 		// box; SetLogger overrides it. The old discard default is why the
 		// run loop was invisible during debugging.
-		log:          slog.Default(),
-		tickInterval: defaultTickInterval,
-		members:      make(map[string]*memberRun),
+		log:            slog.Default(),
+		tickInterval:   defaultTickInterval,
+		rescanInterval: defaultRescanInterval,
+		members:        make(map[string]*memberRun),
 	}
 }
 
@@ -85,6 +94,7 @@ func (s *Supervisor) Start(ctx context.Context) {
 		s.startMemberLoop(ctx, name)
 	}
 	go s.timerTick(ctx)
+	go s.rescanTick(ctx)
 }
 
 // AddMember hot-loads agents/sub/<name>/ into the live space — roster entry,

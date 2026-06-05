@@ -118,6 +118,33 @@ export function consoleTurns(turns, agentId, member) {
   )
 }
 
+// displayPhase composes a roster member's coarse run status and fine,
+// event-derived phase into one label — the JS twin of swarm.MemberView.DisplayPhase
+// (RP-3). A suspended member reads "suspended" (coarse wins); otherwise the fine
+// phase, with the tool appended for executing/waiting-approval ("executing:bash");
+// an empty phase falls back to the coarse run. Lets the roster show WHAT a member
+// is doing (thinking / executing a tool / blocked on approval) instead of a flat
+// "busy".
+export function displayPhase(m) {
+  if (!m) return ''
+  if (m.run === 'suspended') return 'suspended'
+  if (!m.phase) return m.run || ''
+  return m.tool ? `${m.phase}:${m.tool}` : m.phase
+}
+
+// phaseClass maps a member to a CSS modifier so the roster pill can colour
+// blocked/active phases distinctly (waiting-approval stands out — it is the
+// state an operator must act on).
+export function phaseClass(m) {
+  if (!m) return ''
+  if (m.run === 'suspended') return 'suspended'
+  const p = m.phase || m.run || ''
+  if (p === 'waiting-approval' || p === 'waiting-input') return 'waiting'
+  if (p === 'error') return 'error'
+  if (p === 'ready' || m.run === 'idle') return 'idle'
+  return 'busy'
+}
+
 // isApproval / isQuestion classify the two interactive gate events the Leader
 // Chat surfaces as overlays.
 export function isApproval(ev) {

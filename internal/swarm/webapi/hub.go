@@ -2,9 +2,18 @@ package webapi
 
 import (
 	"sync"
+	"time"
 
 	"golang.org/x/net/websocket"
 )
+
+// wsWriteTimeout bounds how long a single frame write may block. Without it a
+// half-open browser socket wedges the per-space event pump (Publish → send is
+// synchronous), which stops draining the space's event channel and — once it
+// fills — blocks EVERY member's Emit, freezing the whole space (including the
+// approval events needed to unblock it). On timeout the write errors, Publish
+// drops the connection, and the browser reconnects. (RP-2 §3.5.)
+const wsWriteTimeout = 5 * time.Second
 
 // Hub fans each space's event stream out to the browser. Every WebSocket client
 // subscribes to exactly one space — and optionally one agent within it — and the
@@ -66,14 +75,20 @@ func (h *Hub) Publish(spaceID, agentID string, payload []byte) {
 	for _, c := range targets {
 		if err := c.send(payload); err != nil {
 			h.remove(c)
+			// Close so the connection's receive loop unblocks too — a write
+			// timeout means the socket is wedged; leaving it half-open would keep
+			// serveSocket parked in Receive.
+			_ = c.ws.Close()
 		}
 	}
 }
 
-// send writes one frame, serialised against any other writer on this conn.
+// send writes one frame, serialised against any other writer on this conn, under
+// a write deadline so a stuck socket fails fast instead of blocking the pump.
 func (c *wsConn) send(payload []byte) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	_ = c.ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 	return websocket.Message.Send(c.ws, string(payload))
 }
 

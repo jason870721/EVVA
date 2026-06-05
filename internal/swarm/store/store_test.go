@@ -296,6 +296,92 @@ func TestUnreadForOrderingAndExclusion(t *testing.T) {
 	}
 }
 
+// TestClaimLifecycle covers RP-1's unread→claimed→read message lifecycle: a
+// claim is exclusive (drain B can't re-fold a claimed row), and a clean run
+// settles every claim — the start batch (ClaimUnread) plus a mid-run fold
+// (ClaimOne) — to read in one SettleClaimed.
+func TestClaimLifecycle(t *testing.T) {
+	st := openTemp(t)
+	put := func(id string, at int64) {
+		if err := st.PutMessage(Message{ID: id, Sender: "a", Recipient: "bob", Body: id, CreatedAt: at}); err != nil {
+			t.Fatalf("put %s: %v", id, err)
+		}
+	}
+	put("m1", 1000)
+	put("m2", 2000)
+
+	// ClaimUnread takes the whole unread batch oldest-first and claims each.
+	batch, err := st.ClaimUnread("bob")
+	if err != nil {
+		t.Fatalf("ClaimUnread: %v", err)
+	}
+	if len(batch) != 2 || batch[0].ID != "m1" || batch[1].ID != "m2" {
+		t.Fatalf("ClaimUnread = %+v, want [m1 m2]", batch)
+	}
+	for _, m := range batch {
+		if m.ClaimedAt == nil || m.ReadAt != nil {
+			t.Fatalf("claimed row wants claimed_at set, read_at nil: %+v", m)
+		}
+	}
+
+	// A second ClaimUnread sees nothing — the batch is claimed, not yet read.
+	if again, _ := st.ClaimUnread("bob"); len(again) != 0 {
+		t.Fatalf("second ClaimUnread = %+v, want empty (already claimed)", again)
+	}
+	// ClaimOne on an already-claimed row is refused (the drain-B dedup).
+	if _, ok, _ := st.ClaimOne("m1"); ok {
+		t.Fatal("ClaimOne on a claimed row should return ok=false")
+	}
+
+	// A message arriving now IS claimable by drain B.
+	put("m3", 3000)
+	got, ok, err := st.ClaimOne("m3")
+	if err != nil || !ok || got.ID != "m3" {
+		t.Fatalf("ClaimOne(m3) = %+v ok=%v err=%v, want m3/true", got, ok, err)
+	}
+
+	// One settle marks every claimed row (batch + drain-B fold) read.
+	if err := st.SettleClaimed("bob"); err != nil {
+		t.Fatalf("SettleClaimed: %v", err)
+	}
+	if ids, _ := st.UnreadFor("bob"); len(ids) != 0 {
+		t.Fatalf("after settle UnreadFor = %v, want empty", ids)
+	}
+	for _, id := range []string{"m1", "m2", "m3"} {
+		if m, _ := st.GetMessage(id); m.ReadAt == nil {
+			t.Fatalf("%s should be read after settle", id)
+		}
+	}
+}
+
+// TestUnclaimForResetsAbortedRun: a run that claims mail then aborts must leave
+// the mail UNREAD and re-claimable (the opposite-of-lost guarantee), and must
+// never resurrect an already-read message.
+func TestUnclaimForResetsAbortedRun(t *testing.T) {
+	st := openTemp(t)
+	if err := st.PutMessage(Message{ID: "m1", Sender: "a", Recipient: "bob", Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimUnread("bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UnclaimFor("bob"); err != nil { // run aborted → reset
+		t.Fatalf("UnclaimFor: %v", err)
+	}
+	if ids, _ := st.UnreadFor("bob"); !reflect.DeepEqual(ids, []string{"m1"}) {
+		t.Fatalf("after unclaim UnreadFor = %v, want [m1]", ids)
+	}
+	if batch, _ := st.ClaimUnread("bob"); len(batch) != 1 || batch[0].ID != "m1" {
+		t.Fatalf("re-claim after unclaim = %+v, want [m1]", batch)
+	}
+	// Settle, then a stray unclaim must NOT bring it back.
+	_ = st.SettleClaimed("bob")
+	_ = st.UnclaimFor("bob")
+	if ids, _ := st.UnreadFor("bob"); len(ids) != 0 {
+		t.Fatalf("UnclaimFor must not resurrect a read message: %v", ids)
+	}
+}
+
 // TestConcurrentReadersAndWriter covers AC#6: with -race, concurrent readers
 // and writers through the RWMutex DAO must not race. Writers do bounded work,
 // then signal readers to stop.

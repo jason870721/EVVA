@@ -4,6 +4,7 @@ import { ref, watch } from 'vue'
 const props = defineProps({
   approval: { type: Object, default: null }, // {agentId, requestId, tool, description, reason, risk, plan}
   question: { type: Object, default: null }, // {agentId, requestId, questions:[{Question,Header,Options,MultiSelect}]}
+  pendingCount: { type: Number, default: 0 }, // total queued gates (approvals + questions)
 })
 const emit = defineEmits(['permission', 'question'])
 
@@ -51,6 +52,9 @@ function submitAnswers() {
 <template>
   <div v-if="approval || question" class="scrim">
     <div class="modal">
+      <div v-if="pendingCount > 1" class="queued">
+        {{ pendingCount }} pending — answer one at a time
+      </div>
       <template v-if="approval">
         <h3>Permission requested</h3>
         <div class="tool">
@@ -109,6 +113,15 @@ function submitAnswers() {
 }
 h3 {
   margin: 0 0 0.75rem;
+}
+.queued {
+  font-size: 0.72rem;
+  color: #a855f7;
+  border: 1px solid #a855f7;
+  border-radius: 8px;
+  padding: 0.2rem 0.5rem;
+  margin-bottom: 0.7rem;
+  display: inline-block;
 }
 .tool {
   display: flex;

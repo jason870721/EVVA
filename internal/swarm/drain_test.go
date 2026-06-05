@@ -8,9 +8,13 @@ import (
 	"github.com/johnny1110/evva/internal/swarm/store"
 )
 
-// TestInboxDrainerReadsAndMarks: the swarm drainer pulls a delivered message off
-// the mailbox, formats it, marks it read, and is empty on the next poll.
-func TestInboxDrainerReadsAndMarks(t *testing.T) {
+// TestInboxDrainerClaimsThenSettles: the swarm drainer pulls a delivered message
+// off the mailbox, formats it, and CLAIMS it (claimed_at set, read_at still nil —
+// drain B no longer eagerly marks read). A second poll is empty (a claimed
+// message is not re-folded), and the supervisor's SettleClaimed — called on a
+// clean run end — is what finally stamps read_at. This split is what lets a
+// folded-then-aborted message be recovered instead of silently lost (RP-1).
+func TestInboxDrainerClaimsThenSettles(t *testing.T) {
 	cfg := stubConfig(t)
 	sp, err := NewSpace("s", testManifest(), testLoaded(), nil, cfg)
 	if err != nil {
@@ -42,13 +46,24 @@ func TestInboxDrainerReadsAndMarks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get message: %v", err)
 	}
-	if got.ReadAt == nil {
-		t.Error("drained message was not marked read")
+	if got.ClaimedAt == nil {
+		t.Error("drained message was not claimed")
+	}
+	if got.ReadAt != nil {
+		t.Error("drain B must only claim, not mark read (settle happens on clean run end)")
 	}
 
-	// Nothing left to drain.
+	// Nothing left to drain — a claimed message is not re-folded.
 	if _, ok := d.Drain(context.Background()); ok {
 		t.Error("second drain should be empty")
+	}
+
+	// The supervisor settles claims on a clean run end → now it's read.
+	if err := sp.Store.SettleClaimed("worker-a"); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if got, _ := sp.Store.GetMessage(uuid); got.ReadAt == nil {
+		t.Error("SettleClaimed should stamp read_at on the claimed message")
 	}
 }
 

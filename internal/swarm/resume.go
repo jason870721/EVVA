@@ -78,6 +78,11 @@ func (sp *SwarmSpace) Reload() {
 		if id := latestSessionFor(ag, name); id != "" {
 			_ = ag.ResumeSession(id)
 		}
+		// A run that died mid-flight may have left messages claimed (claimed_at
+		// set, read_at NULL). Reset those to unread first so they re-queue and
+		// re-fold — otherwise ClaimUnread would skip them and they'd never be
+		// delivered (RP-1: the DB is truth, a dangling claim is recoverable).
+		_ = sp.Store.UnclaimFor(name)
 		if ids, err := sp.Store.UnreadFor(name); err == nil && len(ids) > 0 {
 			sp.Bus.Requeue(name, ids)
 		}

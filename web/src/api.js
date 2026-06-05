@@ -30,6 +30,9 @@ export function createApi(getToken) {
     messages: (id) => req('GET', `/api/messages?space=${enc(id)}`),
     transcript: (id, agent) =>
       req('GET', `/api/agents/${enc(agent)}/transcript?space=${enc(id)}`),
+    // Outstanding approval/question gates (raw event shape) — re-rendered on
+    // (re)connect so a member blocked before we connected isn't left hung.
+    pending: (id) => req('GET', `/api/swarm/${enc(id)}/pending`),
 
     // commands
     run: (id, agent, prompt) =>

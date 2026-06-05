@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/johnny1110/evva/internal/swarm/agentdef"
+	"github.com/johnny1110/evva/internal/swarm/store"
 )
 
 // wakeReason identifies why a member's run loop fired. The two mechanical wake
@@ -77,51 +78,71 @@ func (s *Supervisor) runLoop(ctx context.Context, name string, m *memberRun) {
 	}
 }
 
-// serve runs one wake on a member — but only if it is active, not suspended, and
-// actually has work. It owns the idle↔busy↔suspended roster bookkeeping and the
-// drain-A mark-read.
+// serve handles one wake on a member (active members only). A timer wake runs
+// the standing-duty prompt once; then, for both wake kinds, it drains the
+// member's mailbox to EMPTY — claiming each unread batch from the store and
+// running it, until the store reports nothing unread. Draining against the DB
+// rather than trusting a chan hint to survive is what makes a lost or
+// over-delivered hint harmless: the store is the single source of truth for
+// liveness as well as content (§6.2). Roster bookkeeping + the message lifecycle
+// (claim → settle/unclaim) live in runOnce.
 func (s *Supervisor) serve(ctx context.Context, name string, m *memberRun, reason wakeReason) {
 	if !s.isActive(name) {
 		return // frozen: never scheduled
 	}
 
-	prompt, msgIDs := s.composePrompt(name, reason)
-	if prompt == "" {
-		return // nothing to do — idle burns no tokens
-	}
-
-	reasonStr := "message"
 	if reason == wakeTimer {
-		reasonStr = "timer"
-	}
-	s.log.Debug("swarm serve: member has work",
-		"member", name, "wake", reasonStr, "unread", len(msgIDs), "prompt_bytes", len(prompt))
-
-	// The run-start prompt already folded the whole unread batch (msgIDs) from
-	// the store. Their mailbox hints are still buffered, so clear them now —
-	// otherwise the in-run inbox drainer (drain B) would re-fold the same
-	// messages from those stale hints. Done after composePrompt so anything in
-	// the snapshot is covered; mail arriving AFTER this point keeps its hint and
-	// is delivered mid-run by drain B. (Timer wakes fold no batch, msgIDs nil,
-	// so their message hints are left for normal handling.)
-	if len(msgIDs) > 0 {
-		s.drainStaleHints(name)
+		// A standing-duty tick. runOnce still settles/unclaims any mail drain B
+		// folded during it, so even a timer run can't strand a mid-run message.
+		s.log.Debug("swarm serve: timer duty", "member", name)
+		if !s.runOnce(ctx, name, m, scheduledDutyPrompt) {
+			return // suspended/errored — stop here
+		}
 	}
 
-	// Claim the run unless a Suspend beat us to it. The roster status flips under
-	// m.mu so a racing Suspend's RunSuspended can't be overwritten by our
-	// RunBusy.
+	// Level-triggered mail drain: claim the unread batch, run it, repeat until
+	// the store has no unread for this member. Mail that lands during a run is
+	// caught on the next pass here (or folded mid-run by drain B).
+	for s.isActive(name) {
+		batch, err := s.store.ClaimUnread(name)
+		if err != nil {
+			s.log.Warn("swarm serve: claim unread", "member", name, "err", err)
+			return
+		}
+		if len(batch) == 0 {
+			return // nothing unread — idle burns no tokens
+		}
+		s.log.Debug("swarm serve: member has mail", "member", name, "batch", len(batch))
+		if !s.runOnce(ctx, name, m, composeMailPrompt(batch)) {
+			return // suspended/errored — runOnce already unclaimed the batch for retry
+		}
+	}
+}
+
+// runOnce claims the run slot (unless a Suspend beat it), runs one prompt under a
+// cancellable context, and settles the message lifecycle exactly once: on a
+// clean finish it stamps read_at on everything claimed during the run — the
+// start batch plus any drain-B folds — via SettleClaimed; on any non-clean exit
+// (suspend / cancel / error / panic) it resets those claims to unread via
+// UnclaimFor so the mail retries (§6.2 — the DB is truth). Returns whether the
+// run finished cleanly. This single settle point is why drain A and drain B can
+// never disagree about when a message becomes read.
+func (s *Supervisor) runOnce(ctx context.Context, name string, m *memberRun, prompt string) (clean bool) {
+	// Claim the run unless a Suspend beat us. The roster status flips under m.mu
+	// so a racing Suspend's RunSuspended can't be overwritten by our RunBusy.
 	m.mu.Lock()
 	if m.suspended {
 		m.mu.Unlock()
-		return
+		// A batch claimed just before this was suspended must not stay claimed.
+		_ = s.store.UnclaimFor(name)
+		return false
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	m.cancelRun = cancel
 	s.sp.Roster.setRun(name, RunBusy)
 	m.mu.Unlock()
 
-	s.log.Debug("swarm run start", "member", name, "wake", reasonStr)
+	s.log.Debug("swarm run start", "member", name)
 	_, err := s.safeRun(runCtx, name, prompt)
 	cancel()
 
@@ -133,23 +154,22 @@ func (s *Supervisor) serve(ctx context.Context, name string, m *memberRun, reaso
 	}
 	m.mu.Unlock()
 
-	// A run that ended in error (incl. a cancelled context — e.g. an approval
-	// that was never answered, or a Suspend) leaves its mail unread for retry.
-	// Surface it: a silently aborted run is the hardest swarm failure to debug.
+	clean = !suspended && err == nil
 	if err != nil {
+		// A silently aborted run is the hardest swarm failure to debug — surface it.
 		s.log.Warn("swarm run aborted", "member", name, "suspended", suspended, "err", err)
 	} else {
-		s.log.Debug("swarm run end", "member", name, "suspended", suspended, "marked_read", len(msgIDs))
+		s.log.Debug("swarm run end", "member", name, "suspended", suspended)
 	}
 
-	// Drain A: a message is consumed (read_at stamped) only after a clean,
-	// finished run. A suspended / panicked / errored run leaves it unread so it
-	// retries on Resume or restart (§6.2 — the DB is truth).
-	if !suspended && err == nil {
-		for _, id := range msgIDs {
-			_ = s.store.MarkRead(id)
+	if clean {
+		if err := s.store.SettleClaimed(name); err != nil {
+			s.log.Warn("swarm serve: settle claimed", "member", name, "err", err)
 		}
+	} else {
+		_ = s.store.UnclaimFor(name)
 	}
+	return clean
 }
 
 // safeRun calls Controller.Run inside a recover guard so one agent's panic
@@ -169,26 +189,14 @@ func (s *Supervisor) safeRun(ctx context.Context, name, prompt string) (out stri
 	return ctl.Run(ctx, prompt)
 }
 
-// composePrompt builds the synthetic prompt for a wake. A message/resume wake
-// gathers the member's unread mail from the store (the DB is truth — this
-// naturally absorbs dropped chan hints and stragglers) and returns the ids to
-// mark read on success. A timer wake is a standing-duty prompt with nothing to
-// mark.
-func (s *Supervisor) composePrompt(name string, reason wakeReason) (string, []string) {
-	if reason == wakeTimer {
-		return scheduledDutyPrompt, nil
-	}
-	ids, err := s.store.UnreadFor(name)
-	if err != nil || len(ids) == 0 {
-		return "", nil
-	}
+// composeMailPrompt renders a claimed batch of unread mail (store.ClaimUnread,
+// already oldest-first) as the synthetic run-start prompt. The rows come from the
+// store — the single source of truth — so this naturally absorbs dropped or
+// over-delivered chan hints.
+func composeMailPrompt(batch []store.Message) string {
 	var b strings.Builder
 	b.WriteString("You have unread messages from your teammates. Read each one and take whatever action it asks for; use send_message to reply or report back.\n")
-	for _, id := range ids {
-		msg, err := s.store.GetMessage(id)
-		if err != nil {
-			continue
-		}
+	for _, msg := range batch {
 		b.WriteString("\n--- Message from ")
 		b.WriteString(msg.Sender)
 		if msg.Subject != "" {
@@ -200,30 +208,10 @@ func (s *Supervisor) composePrompt(name string, reason wakeReason) (string, []st
 		b.WriteString(msg.Body)
 		b.WriteString("\n")
 	}
-	return b.String(), ids
+	return b.String()
 }
 
 const scheduledDutyPrompt = "[Scheduled duty] Your recurring schedule fired. Carry out your standing responsibilities now: check the state you are responsible for and take any action it requires. If everything is in order, report that briefly and stand down — do not invent work."
-
-// drainStaleHints empties a member's mailbox channel of buffered UUID hints.
-// Called once the run-start prompt has folded the unread batch from the store,
-// so the leftover hints for that batch don't make the in-run drainer (drain B)
-// re-fold the same messages. Runs on the loop goroutine (no concurrent reader),
-// non-blocking via select-default. The durable rows are untouched — only the
-// best-effort hints are cleared.
-func (s *Supervisor) drainStaleHints(name string) {
-	inbox := s.bus.Inbox(name)
-	if inbox == nil {
-		return
-	}
-	for {
-		select {
-		case <-inbox:
-		default:
-			return
-		}
-	}
-}
 
 // poke signals a member's non-message wake (timer or resume). Non-blocking: if a
 // poke is already pending, the loop is guaranteed to run, so dropping this one
@@ -232,6 +220,45 @@ func (s *Supervisor) poke(m *memberRun, r wakeReason) {
 	select {
 	case m.wake <- r:
 	default:
+	}
+}
+
+// rescanTick is the safety re-scan goroutine (one per space): it periodically
+// pokes any idle, active member the store still shows unread mail for. The
+// level-triggered drain in serve already covers mail that arrives during or
+// after a run; this covers the one case it can't — a wake hint dropped entirely
+// (full buffer, or a delivery that raced registration), so the member was never
+// woken at all. It turns a permanent stall into a ≤rescanInterval delay.
+func (s *Supervisor) rescanTick(ctx context.Context) {
+	t := time.NewTicker(s.rescanInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.rescanUnread()
+		}
+	}
+}
+
+// rescanUnread pokes every idle, active member that has unread mail in the store.
+// Only idle members are poked: a busy one is already draining (its unread are
+// claimed mid-run), and a suspended/frozen one must not run. A spurious poke is
+// harmless — serve just claims an empty batch and returns.
+func (s *Supervisor) rescanUnread() {
+	for _, mv := range s.sp.Roster.Snapshot() {
+		if mv.Membership != MembershipActive || mv.Run != RunIdle {
+			continue
+		}
+		ids, err := s.store.UnreadFor(mv.Name)
+		if err != nil || len(ids) == 0 {
+			continue
+		}
+		if m := s.memberOf(mv.Name); m != nil {
+			s.log.Debug("swarm rescan: waking idle member with unread mail", "member", mv.Name, "unread", len(ids))
+			s.poke(m, wakeMessage)
+		}
 	}
 }
 

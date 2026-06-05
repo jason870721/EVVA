@@ -36,6 +36,7 @@ import (
 	"github.com/johnny1110/evva/pkg/agent"
 	"github.com/johnny1110/evva/pkg/common"
 	"github.com/johnny1110/evva/pkg/config"
+	"github.com/johnny1110/evva/pkg/event"
 	"github.com/johnny1110/evva/pkg/ui"
 	"github.com/johnny1110/evva/web"
 )
@@ -45,6 +46,14 @@ import (
 // run shell and edit files, so the workstation is RCE-equivalent and must not
 // be reachable off-box by default.
 const DefaultAddr = "127.0.0.1:8888"
+
+// DefaultToken is the fixed session token while the project is pre-1.0 and the
+// service is loopback-only: a memorable "root" the operator types once, instead
+// of copy-pasting a freshly minted UUID every restart. This is a deliberate
+// test-convenience tradeoff, safe because the host binds 127.0.0.1 (DefaultAddr).
+// TODO(security): before any non-loopback exposure, replace with a minted
+// per-start secret (or real auth) — see docs/veronica/veronica-design-v1.md §8.3.
+const DefaultToken = "root"
 
 // manifestFile is the per-workdir swarm declaration `evva swarm .` reads.
 const manifestFile = "evva-swarm.yml"
@@ -87,6 +96,73 @@ type spaceEntry struct {
 	super    *swarm.Supervisor
 	cancel   context.CancelFunc // stops the supervisor's run loops + timer tick
 	stopPump chan struct{}      // closed after Shutdown so the pump drains then exits
+	pending  *gateTracker       // outstanding approval/question gates, for reconnect replay
+}
+
+// gateTracker remembers a space's outstanding approval/question gates so a
+// browser that connects late — after a gate fired, or across a WS reconnect gap
+// — can hydrate them and answer, instead of the member hanging unseen (RP-2
+// §3.3). It is fed from the event pump (every gate event passes through it) and
+// drained when the gate is answered or its run ends. It stores the raw gate
+// events, so the reconnect path replays the exact shape the live WS sends.
+type gateTracker struct {
+	mu    sync.Mutex
+	gates map[string]event.Event // requestID -> the approval_needed / question_needed event
+}
+
+func newGateTracker() *gateTracker { return &gateTracker{gates: map[string]event.Event{}} }
+
+// observe folds one event into the tracker: a gate event is recorded; a
+// run-terminal event clears any gate still pending for that agent (a member
+// suspended mid-approval leaves a dead gate nobody will answer).
+func (g *gateTracker) observe(e event.Event) {
+	switch e.Kind {
+	case event.KindApprovalNeeded:
+		if e.ApprovalNeeded != nil {
+			g.put(e.ApprovalNeeded.RequestID, e)
+		}
+	case event.KindQuestionNeeded:
+		if e.QuestionNeeded != nil {
+			g.put(e.QuestionNeeded.RequestID, e)
+		}
+	case event.KindRunEnd, event.KindRunCancelled, event.KindError:
+		g.clearAgent(e.AgentID)
+	}
+}
+
+func (g *gateTracker) put(reqID string, e event.Event) {
+	if reqID == "" {
+		return
+	}
+	g.mu.Lock()
+	g.gates[reqID] = e
+	g.mu.Unlock()
+}
+
+func (g *gateTracker) remove(reqID string) {
+	g.mu.Lock()
+	delete(g.gates, reqID)
+	g.mu.Unlock()
+}
+
+func (g *gateTracker) clearAgent(agentID string) {
+	g.mu.Lock()
+	for id, e := range g.gates {
+		if e.AgentID == agentID {
+			delete(g.gates, id)
+		}
+	}
+	g.mu.Unlock()
+}
+
+func (g *gateTracker) snapshot() []event.Event {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]event.Event, 0, len(g.gates))
+	for _, e := range g.gates {
+		out = append(out, e)
+	}
+	return out
 }
 
 // New builds the host bound (logically) to addr. An empty addr uses
@@ -99,7 +175,7 @@ func New(addr string) *Service {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	s := &Service{
 		addr:       addr,
-		token:      common.GenUUID(),
+		token:      DefaultToken,
 		log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		hub:        webapi.NewHub(),
 		rootCtx:    rootCtx,
@@ -277,7 +353,7 @@ func (s *Service) register(id string, m agentdef.Manifest, loaded []agentdef.Loa
 
 	stopPump := make(chan struct{})
 	s.mu.Lock()
-	s.spaces[id] = &spaceEntry{space: sp, super: super, cancel: cancel, stopPump: stopPump}
+	s.spaces[id] = &spaceEntry{space: sp, super: super, cancel: cancel, stopPump: stopPump, pending: newGateTracker()}
 	s.mu.Unlock()
 
 	go s.pump(sp, stopPump)
@@ -455,8 +531,12 @@ func (s *Service) pump(sp *swarm.SwarmSpace, stop <-chan struct{}) {
 	}
 }
 
-// publish marshals one spaced event and fans it out by (spaceID, AgentID).
+// publish records gate lifecycle for reconnect replay, then marshals one spaced
+// event and fans it out by (spaceID, AgentID).
 func (s *Service) publish(e swarm.SpacedEvent) {
+	if ent, ok := s.entry(e.SpaceID); ok {
+		ent.pending.observe(e.Event)
+	}
 	payload, err := json.Marshal(wireEvent{SpaceID: e.SpaceID, Event: e.Event})
 	if err != nil {
 		return
@@ -524,6 +604,8 @@ func (s *Service) Roster(id string) ([]webapi.MemberInfo, bool) {
 			Role:        string(v.Role),
 			Membership:  string(v.Membership),
 			Run:         string(v.Run),
+			Phase:       string(v.Phase),
+			Tool:        v.Tool,
 			CurrentTask: v.CurrentTask,
 			WhenToUse:   v.WhenToUse,
 		})
@@ -573,6 +655,22 @@ func (s *Service) Messages(id string) ([]webapi.MessageInfo, bool) {
 	return out, true
 }
 
+// PendingGates returns the space's outstanding approval/question gate events in
+// their raw wire shape, so a reconnecting browser re-renders overlays for members
+// still blocked (RP-2 §3.3). false when the space id is unknown.
+func (s *Service) PendingGates(id string) ([]any, bool) {
+	ent, ok := s.entry(id)
+	if !ok {
+		return nil, false
+	}
+	evs := ent.pending.snapshot()
+	out := make([]any, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, e)
+	}
+	return out, true
+}
+
 func (s *Service) Transcript(id, agent string) ([]webapi.TranscriptEntry, bool) {
 	ctl, ok := s.controller(id, agent)
 	if !ok {
@@ -616,6 +714,9 @@ func (s *Service) SendUserMessage(id, to, subject, body string) error {
 	if strings.TrimSpace(body) == "" {
 		return fmt.Errorf("swarm: message body is required")
 	}
+	// Role-addressing (§3.5): let an operator address "leader" without knowing
+	// its member name; "all" and exact names pass through unchanged.
+	to = ent.space.Roster.ResolveRecipient(to)
 	if to != store.RecipientAll {
 		if _, known := ent.space.Roster.Controller(to); !known {
 			return fmt.Errorf("swarm: unknown member %q", to)
@@ -642,6 +743,9 @@ func (s *Service) RespondPermission(id, agent, reqID, behavior, reason, ruleTool
 	if ruleTool != "" {
 		dec.AddRule = &ui.PermissionRuleSeed{ToolName: ruleTool}
 	}
+	if ent, ok := s.entry(id); ok {
+		ent.pending.remove(reqID) // answered — drop it from the reconnect-replay set
+	}
 	return ctl.RespondPermission(reqID, dec)
 }
 
@@ -649,6 +753,9 @@ func (s *Service) RespondQuestion(id, agent, reqID string, answers map[string]st
 	ctl, ok := s.controller(id, agent)
 	if !ok {
 		return fmt.Errorf("swarm: unknown space/agent %q/%q", id, agent)
+	}
+	if ent, ok := s.entry(id); ok {
+		ent.pending.remove(reqID)
 	}
 	return ctl.RespondQuestion(reqID, ui.QuestionResponse{Answers: answers})
 }
@@ -680,11 +787,14 @@ func (s *Service) superCmd(id, agent string, fn func(*swarm.Supervisor, string) 
 	return fn(ent.super, agent)
 }
 
-// controller resolves a member's Controller within a space.
+// controller resolves a member's Controller within a space. agent may be either
+// the member name (internal callers) or the controller AgentID (the web
+// approval/question reply path echoes back the event's AgentID), so it resolves
+// by ref — see Roster.ControllerRef.
 func (s *Service) controller(id, agent string) (ui.Controller, bool) {
 	ent, ok := s.entry(id)
 	if !ok {
 		return nil, false
 	}
-	return ent.space.Roster.Controller(agent)
+	return ent.space.Roster.ControllerRef(agent)
 }

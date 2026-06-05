@@ -72,6 +72,12 @@ func (f *fakeBackend) Transcript(id, agent string) ([]TranscriptEntry, bool) {
 	}
 	return []TranscriptEntry{{Role: "user", Text: "hi"}}, true
 }
+func (f *fakeBackend) PendingGates(id string) ([]any, bool) {
+	if !f.HasSpace(id) {
+		return nil, false
+	}
+	return []any{}, true
+}
 func (f *fakeBackend) Run(space, agent, prompt string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

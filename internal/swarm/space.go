@@ -165,7 +165,13 @@ func (sp *SwarmSpace) constructMember(ld agentdef.Loaded) error {
 	// shared WithCustomTool factory can't carry it in a closure.
 	BindMemberContext(acfg, MemberContext{Name: name, Role: ld.Role, Space: sp})
 
-	sink := &spaceSink{spaceID: sp.ID, out: sp.out}
+	sink := &spaceSink{
+		spaceID: sp.ID,
+		name:    name,
+		roster:  sp.Roster,
+		deriver: newPhaseDeriver(),
+		out:     sp.out,
+	}
 
 	opts := []agent.Option{
 		agent.WithSink(sink),
@@ -239,14 +245,25 @@ func (sp *SwarmSpace) Shutdown() {
 	}
 }
 
-// spaceSink wraps an agent's event stream, stamping the spaceID before
-// forwarding to the space's out channel.
+// spaceSink wraps one member's event stream: it derives that member's fine run
+// phase (RP-3) and updates the roster, then stamps the spaceID and forwards the
+// event to the space's out channel. Deriving here — where each member's events
+// already flow — means the roster (the single source of truth for both
+// list_members and the web) carries the live phase without a second consumer.
 type spaceSink struct {
 	spaceID string
+	name    string
+	roster  *Roster
+	deriver *phaseDeriver
 	out     chan<- SpacedEvent
 }
 
 func (s *spaceSink) Emit(e event.Event) {
+	if s.deriver != nil && s.roster != nil {
+		if p, tool, changed := s.deriver.apply(e); changed {
+			s.roster.setPhase(s.name, p, tool)
+		}
+	}
 	s.out <- SpacedEvent{SpaceID: s.spaceID, Event: e}
 }
 

@@ -29,6 +29,31 @@ const (
 	RunSuspended RunStatus = "suspended"
 )
 
+// RunPhase is the fine-grained, event-derived run sub-phase (RP-3). It refines
+// the coarse RunStatus the supervisor sets (idle/busy/suspended) into the same
+// vocabulary evva's TUI shows — running / thinking / executing / … — plus the
+// swarm-critical WAITING_APPROVAL / WAITING_INPUT, so an operator can tell a long
+// tool call from a hang from a blocked approval instead of seeing a flat "busy".
+// It is derived purely from the member's event stream (see phaseDeriver); the
+// coarse RunStatus stays authoritative for lifecycle (suspended) and for
+// event-less callers. Composition for display: a suspended member shows
+// "suspended" (coarse wins); otherwise the phase.
+type RunPhase string
+
+const (
+	PhaseReady           RunPhase = "ready"            // idle — burns no tokens
+	PhaseRunning         RunPhase = "running"          // loop alive between sub-phases
+	PhaseThinking        RunPhase = "thinking"         // model generating reasoning
+	PhaseTexting         RunPhase = "texting"          // model generating response text
+	PhaseExecuting       RunPhase = "executing"        // a tool call is in flight (Tool names it)
+	PhaseWaitingApproval RunPhase = "waiting-approval" // blocked in the permission broker (Tool names it)
+	PhaseWaitingInput    RunPhase = "waiting-input"    // blocked in the question broker
+	PhaseDraining        RunPhase = "draining"         // folding async results / inbox
+	PhaseCompacting      RunPhase = "compacting"       // session compaction
+	PhasePaused          RunPhase = "paused"           // iteration limit
+	PhaseError           RunPhase = "error"            // last run failed
+)
+
 // rosterEntry is the internal record. The Controller handle is unexported —
 // only the supervisor/webapi reach it via Controller(); read surfaces get a
 // MemberView (no handle) from Snapshot.
@@ -36,7 +61,9 @@ type rosterEntry struct {
 	name        string
 	role        agentdef.Role
 	membership  Membership
-	run         RunStatus
+	run         RunStatus // coarse lifecycle, supervisor-set (idle/busy/suspended)
+	phase       RunPhase  // fine sub-phase, event-derived (refines busy)
+	tool        string    // tool name for executing / waiting-approval phases
 	currentTask int64
 	whenToUse   string
 	ctl         ui.Controller
@@ -49,8 +76,29 @@ type MemberView struct {
 	Role        agentdef.Role
 	Membership  Membership
 	Run         RunStatus
+	Phase       RunPhase
+	Tool        string
 	CurrentTask int64
 	WhenToUse   string
+}
+
+// DisplayPhase composes the coarse run status and the fine event-derived phase
+// into the single label shown to operators and teammates. A suspended member
+// reads "suspended" (the coarse status wins, since the deriver may have moved to
+// "ready" right after the cancel); otherwise the fine phase, with the tool name
+// appended for the executing / waiting-approval phases ("executing:bash"). An
+// empty phase falls back to the coarse status. The web composes the same rule.
+func (v MemberView) DisplayPhase() string {
+	if v.Run == RunSuspended {
+		return string(RunSuspended)
+	}
+	if v.Phase == "" {
+		return string(v.Run)
+	}
+	if v.Tool != "" {
+		return string(v.Phase) + ":" + v.Tool
+	}
+	return string(v.Phase)
 }
 
 // Roster is the per-space, thread-safe member directory — the single source of
@@ -73,19 +121,22 @@ func (r *Roster) add(name string, role agentdef.Role, whenToUse string, ctl ui.C
 	if _, dup := r.entries[name]; dup {
 		return fmt.Errorf("roster: duplicate member %q in space", name)
 	}
-	r.entries[name] = &rosterEntry{
+	e := &rosterEntry{
 		name:       name,
 		role:       role,
 		membership: MembershipActive,
 		run:        RunIdle,
+		phase:      PhaseReady,
 		whenToUse:  whenToUse,
 		ctl:        ctl,
 	}
+	r.entries[name] = e
 	r.order = append(r.order, name)
 	return nil
 }
 
-// Controller returns a member's handle, for the supervisor/webapi to drive.
+// Controller returns a member's handle by member name, for the
+// supervisor/webapi to drive.
 func (r *Roster) Controller(name string) (ui.Controller, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -94,6 +145,31 @@ func (r *Roster) Controller(name string) (ui.Controller, bool) {
 		return nil, false
 	}
 	return e.ctl, true
+}
+
+// ControllerRef resolves a controller by either member name OR controller
+// AgentID. Internal callers (supervisor, lifecycle commands) use the name; the
+// web approval/question reply path carries the event's AgentID instead, so it
+// must resolve too — without this, every web-driven RespondPermission misses
+// (name-keyed lookup, AgentID ref) and the blocked tool hangs forever.
+//
+// The name lookup is the O(1) common path; an AgentID falls through to a scan
+// (AgentID() just reads a string field, the member count is small, and gate
+// replies are human-paced — so the scan is free in practice and we avoid a
+// second index to keep in sync). The two namespaces don't overlap (UUID hex vs
+// human names), so name-first is unambiguous.
+func (r *Roster) ControllerRef(ref string) (ui.Controller, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.entries[ref]; ok {
+		return e.ctl, true
+	}
+	for _, e := range r.entries {
+		if e.ctl != nil && e.ctl.AgentID() == ref {
+			return e.ctl, true
+		}
+	}
+	return nil, false
 }
 
 // Names returns the member names in insertion order.
@@ -118,6 +194,8 @@ func (r *Roster) Snapshot() []MemberView {
 			Role:        e.role,
 			Membership:  e.membership,
 			Run:         e.run,
+			Phase:       e.phase,
+			Tool:        e.tool,
 			CurrentTask: e.currentTask,
 			WhenToUse:   e.whenToUse,
 		})
@@ -140,6 +218,36 @@ func (r *Roster) ActiveMembers() []string {
 	return out
 }
 
+// ResolveRecipient maps a send target to a concrete member name. An exact member
+// name and the "all" broadcast pass through unchanged; otherwise the target is
+// treated as a ROLE and resolved to the unique active member of that role — so a
+// worker can address "leader" without knowing the leader's member name (which in
+// practice often differs, e.g. "lead"/"pm"). An ambiguous role (more than one
+// active member, e.g. "worker") or an unknown target is returned unchanged for
+// the caller to reject with a helpful error.
+func (r *Roster) ResolveRecipient(to string) string {
+	if r == nil || to == "" {
+		return to // no roster to resolve against (e.g. a store-only test space)
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.entries[to]; ok {
+		return to // already an exact member name
+	}
+	var match string
+	n := 0
+	for _, name := range r.order {
+		e := r.entries[name]
+		if string(e.role) == to && e.membership == MembershipActive {
+			match, n = name, n+1
+		}
+	}
+	if n == 1 {
+		return match
+	}
+	return to // ambiguous or no role match — leave for the caller to reject
+}
+
 // membership returns a member's membership and whether the member exists. The
 // supervisor's scheduler reads it to gate wakes (frozen members never run).
 func (r *Roster) membership(name string) (Membership, bool) {
@@ -151,13 +259,37 @@ func (r *Roster) membership(name string) (Membership, bool) {
 	return "", false
 }
 
-// setRun updates a member's run status (used by the scheduler/supervisor in
-// SPRD-1-6). Unknown names are ignored.
+// setRun updates a member's coarse run status (supervisor lifecycle). It also
+// keeps the fine phase coherent for event-less callers and at run boundaries:
+// going busy seeds PhaseRunning (the event deriver then refines it), going idle
+// resets to PhaseReady (so no stale sub-phase lingers once the run is over). A
+// suspended member keeps its phase — display composition lets the coarse
+// "suspended" win. Unknown names are ignored.
 func (r *Roster) setRun(name string, s RunStatus) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	e, ok := r.entries[name]
+	if !ok {
+		return
+	}
+	e.run = s
+	switch s {
+	case RunBusy:
+		e.phase, e.tool = PhaseRunning, ""
+	case RunIdle:
+		e.phase, e.tool = PhaseReady, ""
+	}
+}
+
+// setPhase records the event-derived fine sub-phase (and the tool name for
+// executing / waiting-approval). Called by a member's sink as events flow; it
+// never touches the coarse run status, so the supervisor's lifecycle and the
+// deriver's sub-phase compose cleanly. Unknown names are ignored.
+func (r *Roster) setPhase(name string, p RunPhase, tool string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if e, ok := r.entries[name]; ok {
-		e.run = s
+		e.phase, e.tool = p, tool
 	}
 }
 

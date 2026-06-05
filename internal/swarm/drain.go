@@ -16,8 +16,13 @@ import (
 // It is non-blocking by contract: one select-with-default per iteration
 // boundary, so an agent with an empty mailbox pays ~nothing. The mailbox carries
 // only a UUID hint — the message body comes from the durable store, the single
-// source of truth — and a hint whose row is already read (handled by drain A or
-// a stale duplicate hint) is skipped, so no message is ever folded twice.
+// source of truth. Folding CLAIMS the row (store.ClaimOne) rather than marking
+// it read: a hint whose row is already claimed (by the run-start batch or an
+// earlier poll) or already read is skipped, so no message is folded twice; and
+// because the row only settles to read when the run ends cleanly (the supervisor
+// calls SettleClaimed), a message folded into a run that is then suspended or
+// errored is reset to unread and retried — never silently lost (the old
+// eager-MarkRead-on-fold could drop it).
 type inboxDrainer struct {
 	name  string
 	bus   *bus.Bus
@@ -36,14 +41,12 @@ func (d *inboxDrainer) Drain(_ context.Context) (string, bool) {
 	}
 	select {
 	case uuid := <-inbox:
-		msg, err := d.store.GetMessage(uuid)
-		if err != nil {
+		msg, ok, err := d.store.ClaimOne(uuid)
+		if err != nil || !ok {
+			// Not claimable: already folded (start batch / earlier hint), already
+			// read, or gone. Skip — this is the dedup that prevents a double fold.
 			return "", false
 		}
-		if msg.ReadAt != nil {
-			return "", false // already handled (drain A, or a stale duplicate hint)
-		}
-		_ = d.store.MarkRead(uuid)
 		return formatIncoming(msg), true
 	default:
 		return "", false
