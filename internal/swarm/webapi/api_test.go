@@ -18,6 +18,8 @@ var errUnknownSpace = errors.New("unknown space")
 var errBadCron = errors.New("bad cron expression")
 var errBadName = errors.New("illegal member name")
 var errLeaderProtected = errors.New("the leader cannot be removed")
+var errSpaceStopped = errors.New("space is stopped")
+var errBadBody = errors.New("event body is required")
 
 // fakeBackend is a Backend stub that records inbound commands and returns canned
 // snapshots, so the HTTP/WS layer can be exercised without a live swarm.
@@ -30,9 +32,11 @@ type fakeBackend struct {
 	msgs      [][3]string // {space, to, body}
 	perms     [][6]string // {space, agent, reqId, behavior, reason, ruleTool}
 	suspends  [][2]string
-	schedules [][4]string  // {space, agent, cron, prompt}  (cron="" => clear)
-	creates   []MemberSpec // CreateMember calls
-	removes   [][3]string  // {space, agent, deleteDir}
+	schedules [][4]string       // {space, agent, cron, prompt}  (cron="" => clear)
+	creates   []MemberSpec      // CreateMember calls
+	removes   [][3]string       // {space, agent, deleteDir}
+	events    []EventIn         // IngestEvent calls
+	eventKeys map[string]string // idempotency_key -> message id
 }
 
 func (f *fakeBackend) Token() string                           { return f.token }
@@ -178,6 +182,33 @@ func (f *fakeBackend) RemoveMember(space, agent string, deleteDir bool) error {
 	return nil
 }
 func (f *fakeBackend) SelectableTools() []string { return []string{"read", "write", "bash"} }
+func (f *fakeBackend) IngestEvent(ref string, evt EventIn) (string, bool, error) {
+	if ref == "sp-stopped" {
+		return "", false, errSpaceStopped
+	}
+	if !f.HasSpace(ref) {
+		return "", false, errUnknownSpace
+	}
+	if strings.TrimSpace(evt.Body) == "" {
+		return "", false, errBadBody
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if evt.IdempotencyKey != "" {
+		if f.eventKeys == nil {
+			f.eventKeys = map[string]string{}
+		}
+		if id, ok := f.eventKeys[evt.IdempotencyKey]; ok {
+			return id, true, nil // duplicate
+		}
+		id := "evt-" + evt.IdempotencyKey
+		f.eventKeys[evt.IdempotencyKey] = id
+		f.events = append(f.events, evt)
+		return id, false, nil
+	}
+	f.events = append(f.events, evt)
+	return "evt-anon", false, nil
+}
 
 func boolStr(b bool) string {
 	if b {
@@ -467,6 +498,58 @@ func TestRESTMemberAndScheduleRoutes(t *testing.T) {
 	}
 	if s := del(t, srv.URL+"/api/agents/leader"+q); s != http.StatusBadRequest {
 		t.Fatalf("remove leader = %d, want 400", s)
+	}
+}
+
+// RP-9: the external-event webhook is reachable with NO token (loopback trust
+// boundary), maps new→202 / duplicate→200 / missing-body→400 / unknown→404 /
+// stopped→409, while ordinary /api routes still require the token.
+func TestEventWebhookUnauthenticated(t *testing.T) {
+	fake := newFake()
+	srv := httptest.NewServer(NewRouter(fake, NewHub(), nil))
+	defer srv.Close()
+
+	// http.Post sends NO Authorization header and NO ?token — deliberately open.
+	ev := func(path, body string) int {
+		resp, err := http.Post(srv.URL+path, "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if s := ev("/api/swarm/sp-a/event", `{"title":"t","body":"hi"}`); s != http.StatusAccepted {
+		t.Fatalf("event (no token) = %d, want 202", s)
+	}
+	if len(fake.events) != 1 || fake.events[0].Body != "hi" {
+		t.Fatalf("event not recorded: %+v", fake.events)
+	}
+	if s := ev("/api/swarm/sp-a/event", `{"body":"x","idempotency_key":"dk"}`); s != http.StatusAccepted {
+		t.Fatalf("first keyed = %d, want 202", s)
+	}
+	if s := ev("/api/swarm/sp-a/event", `{"body":"x","idempotency_key":"dk"}`); s != http.StatusOK {
+		t.Fatalf("duplicate keyed = %d, want 200", s)
+	}
+	if s := ev("/api/swarm/sp-a/event", `{"title":"t"}`); s != http.StatusBadRequest {
+		t.Fatalf("missing body = %d, want 400", s)
+	}
+	if s := ev("/api/swarm/ghost/event", `{"body":"x"}`); s != http.StatusNotFound {
+		t.Fatalf("unknown space = %d, want 404", s)
+	}
+	if s := ev("/api/swarm/sp-stopped/event", `{"body":"x"}`); s != http.StatusConflict {
+		t.Fatalf("stopped space = %d, want 409", s)
+	}
+
+	// Contrast: a guarded route with no token still 401 — the webhook is the
+	// only open door.
+	resp, err := http.Get(srv.URL + "/api/swarms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("guarded route without token = %d, want 401", resp.StatusCode)
 	}
 }
 

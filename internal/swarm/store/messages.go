@@ -67,6 +67,53 @@ func (s *Store) PutMessage(m Message) error {
 	return nil
 }
 
+// ErrEmptyIdempotencyKey guards the dedup path (the keyless path is PutMessage).
+var ErrEmptyIdempotencyKey = errors.New("store: PutMessageIfNew requires a non-empty idempotency key")
+
+// PutMessageIfNew durably stores a message keyed by an idempotency key, collapsing
+// a retried external event (RP-9) to a single row: it returns inserted=false plus
+// the pre-existing row's id when the key was already seen. The check-then-insert
+// runs under the store's write lock (the DAO serialises every write — single
+// writer), so concurrent retries within the process can't both insert; the
+// partial unique index on idempotency_key is the backstop. The key is write-only
+// here — it is not surfaced on Message, so the read path is untouched.
+func (s *Store) PutMessageIfNew(m Message, key string) (inserted bool, existingID string, err error) {
+	if strings.TrimSpace(m.ID) == "" {
+		return false, "", ErrEmptyMessageID
+	}
+	if strings.TrimSpace(m.Sender) == "" || strings.TrimSpace(m.Recipient) == "" || strings.TrimSpace(m.Body) == "" {
+		return false, "", ErrIncompleteMessage
+	}
+	if strings.TrimSpace(key) == "" {
+		return false, "", ErrEmptyIdempotencyKey
+	}
+	if m.CreatedAt == 0 {
+		m.CreatedAt = time.Now().UnixMilli()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var prior string
+	switch err := s.db.QueryRow(`SELECT id FROM messages WHERE idempotency_key = ?`, key).Scan(&prior); {
+	case err == nil:
+		return false, prior, nil // already accepted under this key
+	case !errors.Is(err, sql.ErrNoRows):
+		return false, "", fmt.Errorf("store: idempotency lookup: %w", err)
+	}
+
+	if _, err := s.db.Exec(
+		`INSERT INTO messages (id, sender, recipient, subject, body, ref_task, read_at, created_at, idempotency_key)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.Sender, m.Recipient, nullableStr(m.Subject), m.Body,
+		nullableInt(m.RefTask), nullableInt(m.ReadAt), m.CreatedAt, key,
+	); err != nil {
+		return false, "", fmt.Errorf("store: put message (idempotent) %s: %w", m.ID, err)
+	}
+	slog.Debug("swarm external event stored", "id", m.ID, "sender", m.Sender, "recipient", m.Recipient, "key", key)
+	return true, "", nil
+}
+
 // GetMessage returns one message by id, or ErrMessageNotFound.
 func (s *Store) GetMessage(id string) (Message, error) {
 	s.mu.RLock()

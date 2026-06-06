@@ -46,6 +46,42 @@ func requireEmpty(t *testing.T, name string, ch <-chan string) {
 	}
 }
 
+// TestSendExternalDedup (RP-9): a keyed external event delivers + signals once; a
+// retry under the same key returns the original id, dup=true, and does NOT
+// re-signal (no second wake). A keyless send is plain delivery.
+func TestSendExternalDedup(t *testing.T) {
+	b, st := newTestBus(t, "leader")
+	b.Register("leader")
+	ch := b.Inbox("leader")
+
+	id, dup, err := b.SendExternal(store.Message{Sender: "webhook", Recipient: "leader", Body: "evt"}, "k1")
+	if err != nil || dup || id == "" {
+		t.Fatalf("first = id:%q dup:%v err:%v, want fresh delivery", id, dup, err)
+	}
+	if got := recv(t, ch); got != id {
+		t.Fatalf("signal = %q, want %q", got, id)
+	}
+	if _, err := st.GetMessage(id); err != nil {
+		t.Fatalf("event row not durable: %v", err)
+	}
+
+	// Retry same key → same id, dup, no new signal.
+	id2, dup2, err := b.SendExternal(store.Message{Sender: "webhook", Recipient: "leader", Body: "retry"}, "k1")
+	if err != nil || !dup2 || id2 != id {
+		t.Fatalf("retry = id:%q dup:%v err:%v, want same id + dup", id2, dup2, err)
+	}
+	requireEmpty(t, "leader", ch)
+
+	// Keyless still delivers + signals.
+	id3, dup3, err := b.SendExternal(store.Message{Sender: "webhook", Recipient: "leader", Body: "no key"}, "")
+	if err != nil || dup3 || id3 == "" {
+		t.Fatalf("keyless = id:%q dup:%v err:%v", id3, dup3, err)
+	}
+	if got := recv(t, ch); got != id3 {
+		t.Fatalf("keyless signal = %q, want %q", got, id3)
+	}
+}
+
 // AC #1 (persist-before-signal, §6.2) + #2 (single delivery, correct fields):
 // the row is readable the instant its UUID arrives, with sender/recipient/body
 // intact.

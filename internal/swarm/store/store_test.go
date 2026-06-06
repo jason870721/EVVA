@@ -22,6 +22,43 @@ func openTemp(t *testing.T) *Store {
 
 func leader() Actor { return Actor{Name: "leader", Role: RoleLeader} }
 
+// TestPutMessageIfNewDedup (RP-9): the same idempotency key collapses to one
+// durable row; a fresh key inserts; an empty key is rejected.
+func TestPutMessageIfNewDedup(t *testing.T) {
+	st := openTemp(t)
+
+	ins, existing, err := st.PutMessageIfNew(Message{ID: "x1", Sender: "webhook", Recipient: "leader", Body: "evt"}, "k1")
+	if err != nil || !ins || existing != "" {
+		t.Fatalf("first = inserted:%v existing:%q err:%v, want inserted", ins, existing, err)
+	}
+	ins2, existing2, err := st.PutMessageIfNew(Message{ID: "x2", Sender: "webhook", Recipient: "leader", Body: "retry"}, "k1")
+	if err != nil || ins2 || existing2 != "x1" {
+		t.Fatalf("same key = inserted:%v existing:%q err:%v, want dup of x1", ins2, existing2, err)
+	}
+	ins3, _, err := st.PutMessageIfNew(Message{ID: "x3", Sender: "webhook", Recipient: "leader", Body: "e"}, "k2")
+	if err != nil || !ins3 {
+		t.Fatalf("new key = inserted:%v err:%v, want inserted", ins3, err)
+	}
+	if _, _, err := st.PutMessageIfNew(Message{ID: "x4", Sender: "s", Recipient: "r", Body: "b"}, ""); err == nil {
+		t.Error("empty idempotency key should error")
+	}
+
+	// Exactly two rows persisted (k1 once + k2), proving the retry didn't double-write.
+	msgs, err := st.ListMessages(0)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	n := 0
+	for _, m := range msgs {
+		if m.Sender == "webhook" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("webhook rows = %d, want 2 (k1 once, k2 once)", n)
+	}
+}
+
 // TestOpenCreatesDBWithPragmas covers AC#1 (WAL) and proves the DSN
 // per-connection pragmas took (foreign_keys on).
 func TestOpenCreatesDBWithPragmas(t *testing.T) {

@@ -2,6 +2,7 @@ package bus
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/johnny1110/evva/internal/swarm/store"
@@ -91,6 +92,29 @@ func (b *Bus) Send(m store.Message) (uuid string, err error) {
 		return "", b.broadcast(m)
 	}
 	return b.deliver(m, m.Recipient)
+}
+
+// SendExternal delivers an external-event message (RP-9) to one recipient with
+// optional idempotency. With an empty key it is plain deliver. With a key it
+// collapses retries: a key already seen returns the original message id and
+// dup=true WITHOUT re-inserting or re-signalling — so a jittery engine that
+// retries the same event can't wake (and trigger) the leader twice. Like Send it
+// never blocks the caller. Unicast only (the webhook addresses one member).
+func (b *Bus) SendExternal(m store.Message, key string) (id string, dup bool, err error) {
+	if strings.TrimSpace(key) == "" {
+		id, err = b.deliver(m, m.Recipient)
+		return id, false, err
+	}
+	m.ID = common.GenUUID()
+	inserted, existingID, err := b.store.PutMessageIfNew(m, key)
+	if err != nil {
+		return "", false, err
+	}
+	if !inserted {
+		return existingID, true, nil // duplicate — already delivered/processing, don't re-wake
+	}
+	b.signal(m.Recipient, m.ID)
+	return m.ID, false, nil
 }
 
 // broadcast fans m out to every active member except the sender — one durable

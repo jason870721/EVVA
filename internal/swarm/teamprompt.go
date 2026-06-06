@@ -79,7 +79,10 @@ proactively:
 How messaging works: a message reaches a teammate even while they are busy — an
 idle teammate wakes to handle it, a busy one folds it into their current work. The
 human operator may also message you directly (you will see it as a message from
-"user"); treat that as a direct instruction. Whenever you receive a message, read
+"user"); treat that as a direct instruction. A message from "webhook" — an
+` + "`external-event`" + ` system-reminder — is a trigger from an outside system: assess it
+and, if it warrants work, break it into tasks and assign the team; if not, note it
+briefly. Don't ignore it as chatter. Whenever you receive a message, read
 it and act on it — do what it asks, or reply/report with ` + "`send_message`" + `.
 
 Communicate deliberately: hand off context when a teammate needs it, ask when you

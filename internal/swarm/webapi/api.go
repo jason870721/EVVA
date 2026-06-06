@@ -91,6 +91,14 @@ type Backend interface {
 	CreateMember(spaceID string, spec MemberSpec) error
 	RemoveMember(spaceID, agent string, deleteDir bool) error
 	SelectableTools() []string
+
+	// IngestEvent delivers an external webhook event (RP-9) onto a member's
+	// mailbox (default the leader), waking it through the ordinary bus path — a
+	// webhook is just a message. duplicate is true when the idempotency key was
+	// already seen (no second delivery/wake). Errors carry "unknown space" /
+	// "stopped" so the handler can map 404 / 409. This rides an UNAUTHENTICATED
+	// route (loopback-only trust boundary — see NewRouter).
+	IngestEvent(ref string, evt EventIn) (messageID string, duplicate bool, err error)
 }
 
 // SpaceInfo is one row of GET /api/swarms. Status is "running" | "stopped"
@@ -159,6 +167,22 @@ type TaskPage struct {
 	Tasks []TaskInfo `json:"tasks"`
 	Total int        `json:"total"`
 }
+
+// EventIn is the body of POST /api/swarm/{id}/event — an external app's signal
+// (RP-9). Only Body is required. Source/Title give the leader provenance; Data is
+// carried verbatim; To defaults to the leader; IdempotencyKey collapses retries.
+type EventIn struct {
+	Title          string          `json:"title"`
+	Body           string          `json:"body"`
+	Source         string          `json:"source"`
+	Data           json.RawMessage `json:"data"`
+	To             string          `json:"to"`
+	IdempotencyKey string          `json:"idempotency_key"`
+}
+
+// maxEventBytes bounds a webhook request body — the endpoint is unauthenticated
+// (loopback-only, RP-9), so cap the read defensively.
+const maxEventBytes = 64 << 10
 
 // MessageInfo mirrors store.Message on the wire (GET /api/messages).
 type MessageInfo struct {
@@ -248,6 +272,36 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"id": id})
 	}))
+	// External-event webhook (RP-9). DELIBERATELY un-guarded (HandleFunc, not
+	// guard): an external app drops a signal here without the root token — the
+	// trust boundary is the loopback bind, not a token (RP-9; §6 future = a
+	// per-space narrow webhook token). The body is size-capped since it's
+	// unauthenticated. new → 202, duplicate idempotency_key → 200, missing body →
+	// 400, unknown space → 404, stopped → 409.
+	mux.HandleFunc("POST /api/swarm/{id}/event", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxEventBytes)
+		var evt EventIn
+		if !decode(w, r, &evt) {
+			return
+		}
+		id, dup, err := b.IngestEvent(r.PathValue("id"), evt)
+		if err != nil {
+			switch {
+			case strings.Contains(err.Error(), "unknown space"):
+				http.Error(w, err.Error(), http.StatusNotFound)
+			case strings.Contains(err.Error(), "stopped"):
+				http.Error(w, err.Error(), http.StatusConflict)
+			default:
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			}
+			return
+		}
+		code := http.StatusAccepted // 202 — fire-and-forget; the leader runs in its own loop
+		if dup {
+			code = http.StatusOK // 200 — already accepted under this key
+		}
+		writeJSON(w, code, map[string]string{"messageId": id})
+	})
 	mux.Handle("GET /api/swarm/{id}", guard(func(w http.ResponseWriter, r *http.Request) {
 		if roster, ok := b.Roster(r.PathValue("id")); ok {
 			writeJSON(w, http.StatusOK, roster)

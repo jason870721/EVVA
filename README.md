@@ -145,6 +145,33 @@ either:
 | `evva swarm reset <ref>` | wipe a space — fresh ledger + cleared agent context, same id |
 | `evva swarm add <ref> <m>` | hot-load member `<m>` into a space |
 
+**External-event webhook.** An outside app can drive a swarm's leader by POSTing
+an event — a webhook is just a message dropped on the leader's mailbox, so the
+leader wakes (or folds it into its current run) and decides what to do. The
+endpoint is **unauthenticated** (the service binds loopback only; this is for
+local integrations in the current phase):
+
+```
+POST http://127.0.0.1:8888/api/swarm/<ref>/event
+Body: { "title"?, "body" (required), "source"?, "data"?, "to"? (default leader), "idempotency_key"? }
+→ 202 { "messageId": "<id>" }   (200 if the idempotency_key was already seen)
+```
+
+```python
+# in your engine — one function is all you need
+import requests
+EVVA = "http://127.0.0.1:8888/api/swarm/trader/event"
+def notify(title, body, data=None):
+    requests.post(EVVA, json={"title": title, "body": body, "data": data}, timeout=2)
+
+notify("BTC volatility spike", "BTC 1m vol > 3σ; 64210→66800 in 4m", {"symbol": "BTC", "z": 3.4})
+```
+
+```bash
+curl -XPOST http://127.0.0.1:8888/api/swarm/trader/event \
+  -d '{"title":"BTC volatility spike","body":"vol>3σ","data":{"symbol":"BTC","z":3.4}}'
+```
+
 ---
 
 ## How to integrate EVVA agent in your Go project?

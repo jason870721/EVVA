@@ -1231,6 +1231,81 @@ func (s *Service) notifyLeader(ent *spaceEntry, subject, body string) {
 	}
 }
 
+// maxEventDataChars caps the verbatim `data` payload folded into the leader's
+// prompt, so a huge structured blob can't blow the context.
+const maxEventDataChars = 4000
+
+// IngestEvent turns an external webhook event into a single message on the target
+// member's mailbox (RP-9). It adds no orchestration: the supervisor's existing
+// wake/fold drives the leader (idle → drain A, busy → drain B). `to` defaults to
+// the leader; the message is sender "webhook" and time-stamped so the leader sees
+// it as an external trigger. An idempotency key collapses retries (duplicate ==
+// true, same id, no second wake). Errors carry "unknown space" / "stopped" so the
+// (unauthenticated) handler can map 404 / 409; anything else is 400.
+func (s *Service) IngestEvent(ref string, evt webapi.EventIn) (messageID string, duplicate bool, err error) {
+	ent, ok := s.entry(ref)
+	if !ok {
+		s.mu.RLock()
+		exists := s.resolveLocked(ref) != nil
+		s.mu.RUnlock()
+		if exists {
+			return "", false, fmt.Errorf("swarm: space %q is stopped", ref)
+		}
+		return "", false, fmt.Errorf("swarm: unknown space %q", ref)
+	}
+	if strings.TrimSpace(evt.Body) == "" {
+		return "", false, fmt.Errorf("swarm: event body is required")
+	}
+	to := strings.TrimSpace(evt.To)
+	if to == "" {
+		to = "leader"
+	}
+	to = ent.space.Roster.ResolveRecipient(to)
+	if _, known := ent.space.Roster.Controller(to); !known {
+		return "", false, fmt.Errorf("swarm: no member %q in space %q", to, ref)
+	}
+
+	subject := "[event]"
+	if t := strings.TrimSpace(evt.Title); t != "" {
+		subject = "[event] " + t
+	}
+	source := strings.TrimSpace(evt.Source)
+	if source == "" {
+		source = "external"
+	}
+	id, dup, err := ent.space.Bus.SendExternal(store.Message{
+		Sender:    "webhook",
+		Recipient: to,
+		Subject:   subject,
+		Body:      shapeEvent(source, evt.Body, evt.Data),
+	}, strings.TrimSpace(evt.IdempotencyKey))
+	if err != nil {
+		return "", false, fmt.Errorf("swarm: ingest event: %w", err)
+	}
+	return id, dup, nil
+}
+
+// shapeEvent frames an external event as the leader's run-start prompt: a
+// <system-reminder> carrying the source and the trigger time (the one place a
+// wall-clock time enters the conversation, as with RP-7's timer wake) plus the
+// verbatim (truncated) data payload, so the leader recognises it as an external
+// signal to assess and act on rather than chatter.
+func shapeEvent(source, body string, data json.RawMessage) string {
+	var b strings.Builder
+	b.WriteString("<system-reminder>\n")
+	fmt.Fprintf(&b, "external-event  source=%s  time=%s\n", source, time.Now().Format("2006-01-02 15:04:05"))
+	b.WriteString(body)
+	if d := strings.TrimSpace(string(data)); d != "" && d != "null" {
+		if len(d) > maxEventDataChars {
+			d = d[:maxEventDataChars] + "…(truncated)"
+		}
+		b.WriteString("\ndata: ")
+		b.WriteString(d)
+	}
+	b.WriteString("\n</system-reminder>")
+	return b.String()
+}
+
 func (s *Service) HaltAll(id string) error {
 	ent, ok := s.entry(id)
 	if !ok {
