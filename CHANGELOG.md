@@ -12,11 +12,11 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ## [Unreleased]
 
-## [v1.4.3-beta.1] — 2026-06-07
+## [v1.4.3] — 2026-06-07
 
-Patch beta on v1.4.2. Swarm web workstation context-aware UI (EvContextBar,
-event/timeline/color libraries), MCP server config fix, and bubbletea/lp UI
-context propagation.
+First stable release since v0.2.0. Swarm web workstation context-aware UI
+(EvContextBar, event/timeline/color libraries), MCP server config fix, and
+bubbletea/lp UI context propagation.
 
 ### Added
 
@@ -1005,8 +1005,8 @@ Initial published tag — Phase 13 SDK split + Phase 14 session storage +
 Phase 15 friday proof of concept. See `CLAUDE.md` for the per-phase
 deliverables.
 
-[Unreleased]: https://github.com/johnny1110/evva/compare/v1.4.3-beta.1...HEAD
-[v1.4.3-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.2-beta.1...v1.4.3-beta.1
+[Unreleased]: https://github.com/johnny1110/evva/compare/v1.4.3...HEAD
+[v1.4.3]: https://github.com/johnny1110/evva/compare/v1.4.2-beta.1...v1.4.3
 [v1.4.2-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.1-beta.1...v1.4.2-beta.1
 [v1.4.1-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.0-beta.1...v1.4.1-beta.1
 [v1.4.0-beta.1]: https://github.com/johnny1110/evva/compare/v1.3.0-beta.1...v1.4.0-beta.1
