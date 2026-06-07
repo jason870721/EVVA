@@ -12,6 +12,31 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ## [Unreleased]
 
+## [v1.4.3-beta.1] — 2026-06-07
+
+Patch beta on v1.4.2. Swarm web workstation context-aware UI (EvContextBar,
+event/timeline/color libraries), MCP server config fix, and bubbletea/lp UI
+context propagation.
+
+### Added
+
+- **Swarm FE v2 — EvContextBar.** New situational-awareness bar component
+  showing agent context across the workstation views.
+- **Swarm FE v2 — events, timeline, and colors libraries.** TypeScript utility
+  libs with tests for event routing, timeline state, and theme-aware color
+  generation.
+- **`pkg/mcp` config fix.** `pkg/mcp/config.go` gains proper config loading
+  with tests, fixing MCP server configuration that was silently dropped.
+
+### Changed
+
+- **bubbletea and lp UIs** propagate context through the component tree.
+- **CLI `cmd/evva/main.go`** updated for the new UI context wiring.
+- **Swarm `internal/swarm/service` and `webapi`** updated for the
+  context-aware FE.
+- **FE v2 web2 dist rebuilt** with EvContextBar, updated MailboxList,
+  and member stream context.
+
 ## [v1.4.2-beta.1] — 2026-06-07
 
 Patch beta on v1.4.1. Swarm per-member model pinning, Node 24 web2 rebuild,
@@ -980,7 +1005,8 @@ Initial published tag — Phase 13 SDK split + Phase 14 session storage +
 Phase 15 friday proof of concept. See `CLAUDE.md` for the per-phase
 deliverables.
 
-[Unreleased]: https://github.com/johnny1110/evva/compare/v1.4.2-beta.1...HEAD
+[Unreleased]: https://github.com/johnny1110/evva/compare/v1.4.3-beta.1...HEAD
+[v1.4.3-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.2-beta.1...v1.4.3-beta.1
 [v1.4.2-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.1-beta.1...v1.4.2-beta.1
 [v1.4.1-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.0-beta.1...v1.4.1-beta.1
 [v1.4.0-beta.1]: https://github.com/johnny1110/evva/compare/v1.3.0-beta.1...v1.4.0-beta.1
