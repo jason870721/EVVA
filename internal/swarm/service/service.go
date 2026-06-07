@@ -1050,7 +1050,7 @@ func (s *Service) RespondPermission(id, agent, reqID, behavior, reason, ruleTool
 	return ctl.RespondPermission(reqID, dec)
 }
 
-func (s *Service) RespondQuestion(id, agent, reqID string, answers map[string]string) error {
+func (s *Service) RespondQuestion(id, agent, reqID string, answers map[string][]string) error {
 	ctl, ok := s.controller(id, agent)
 	if !ok {
 		return fmt.Errorf("swarm: unknown space/agent %q/%q", id, agent)
@@ -1058,7 +1058,13 @@ func (s *Service) RespondQuestion(id, agent, reqID string, answers map[string]st
 	if pending, ok := s.pendingFor(id); ok {
 		pending.remove(reqID)
 	}
-	return ctl.RespondQuestion(reqID, ui.QuestionResponse{Answers: answers})
+	// Carry the native multi-select shape (MultiAnswers) and a comma-joined
+	// Answers for any back-compat reader of the string map.
+	single := make(map[string]string, len(answers))
+	for k, v := range answers {
+		single[k] = strings.Join(v, ", ")
+	}
+	return ctl.RespondQuestion(reqID, ui.QuestionResponse{Answers: single, MultiAnswers: answers})
 }
 
 func (s *Service) Suspend(id, agent string) error {
