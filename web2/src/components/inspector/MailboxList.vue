@@ -114,4 +114,10 @@ watch(
   color: var(--color-text-muted);
   border: none !important;
 }
+.capped {
+  border: none !important;
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: var(--color-text-faint);
+}
 </style>
