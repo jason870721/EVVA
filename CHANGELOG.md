@@ -5,9 +5,9 @@ here. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
 Stability tiers are defined in [`docs/sdk-stability.md`](docs/sdk-stability.md).
 
-Only beta and stable releases on `main` get changelog entries; alpha releases on
-`pre-release` are staging-only and do not get separate entries (see
-EVVA.md). The v1.2.0–v1.6.0 work that was documented ahead of release
+Each release gets one entry: it is written when the beta is cut on `pre-release`
+(`[vX.Y.Z-beta.N]`) and renamed to `[vX.Y.Z]` when promoted to stable on `main`
+(see CLAUDE.md). The v1.2.0–v1.6.0 work that was documented ahead of release
 was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ## [Unreleased]

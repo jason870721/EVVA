@@ -144,15 +144,19 @@ Key boundaries:
 
 ### Branch strategy
 
+Each release branch owns exactly one tag tier: **`main` ships stable tags, `pre-release` ships beta tags.** There is no alpha tier.
+
 ```
-main  ← production (stable + beta tags; latest = stable)
-  ↑ Sat merge (pre-release must be a descendant; if diverged, use --no-ff)
-pre-release  ← staging (weekly feature accumulation, alpha tag)
+main  ← production (stable tags only: vX.Y.Z; GitHub "Latest")
+  ↑ Sat merge (pre-release → main; if diverged, use --no-ff)
+pre-release  ← staging (beta tags only: vX.Y.Z-beta.N; GitHub pre-release)
   ↑ Sat merge
 dev  ← integration
   ↑ feature PR, squash/merge after review
 feature/*  ← topic branches (cut from dev)
 ```
+
+This is the seam the `evva update` command rides on: `evva update` resolves GitHub's **Latest** release — the newest stable on `main` — while `evva update v<X>.<Y>.<Z>-beta.<N>` pins to a beta published from `pre-release` (see `pkg/update`).
 
 ### Daily development
 
@@ -162,64 +166,55 @@ feature/*  ← topic branches (cut from dev)
 
 ### Weekly release (every Saturday morning)
 
-The project publishes both pre-release (alpha) and release (beta + stable) tags. Beta tags are marked as `latest` on GitHub when no stable tag exists; once a stable tag is cut, `latest` points to it. Alpha tags are pre-release only.
+The project publishes a **beta** (pre-release, on `pre-release`) and then promotes it to **stable** (Latest, on `main`). Betas are flagged `--prerelease` on GitHub so they never steal the Latest badge from a stable; the stable tag is flagged `--latest`.
 
-**Step 1 — Alpha release (dev → pre-release)**
+**Step 1 — Beta release (dev → pre-release)**
 
 ```bash
 git checkout pre-release
-git merge dev
+git merge dev               # if diverged, this is a merge commit; --no-ff is fine
 ```
 
 Before tagging, verify:
 
-1. `pkg/version/version.go` 中的 `Version` 常數已更新為正確的 alpha 版號（例如 `v1.4.3-alpha.1`）。
-2. Alpha release 不另寫 CHANGELOG，但版號應與 dev 分支累積的變更範圍一致。
+1. `pkg/version/version.go` 中的 `Version` 常數已更新為正確的 beta 版號（例如 `v1.4.4-beta.1`）。
+2. `CHANGELOG.md` 中的 `[Unreleased]` 已改名為對應的 beta 版號（`[v1.4.4-beta.1]`），版號與內容一致，並在頂部補上新的 `[Unreleased]`。
 
-Then bump the version and tag:
-
-```
-git tag -a v<X>.<Y>.<Z>-alpha.<N> -m "v<X>.<Y>.<Z>-alpha.<N> — <summary>"
-git push origin pre-release v<X>.<Y>.<Z>-alpha.<N>
-gh release create v<X>.<Y>.<Z>-alpha.<N> --target pre-release --prerelease --title "v<X>.<Y>.<Z>-alpha.<N> — <summary>"
-```
-
-**Step 2 — Beta release (pre-release → main)**
-
-```bash
-git checkout main
-git merge pre-release --ff-only   # if diverged (e.g. changelog commits on main), use --no-ff merge instead
-```
-
-Before tagging, verify:
-
-1. `pkg/version/version.go` 中的 `Version` 常數已更新為正確的 beta 版號（例如 `v1.4.3-beta.1`）。
-2. `CHANGELOG.md` 中的 `[Unreleased]` 已改名為對應的 beta 版號，版號與內容一致。
-
-Then bump the version and tag:
+Commit the version + changelog bump, then tag and publish as a pre-release:
 
 ```
+git add pkg/version/version.go CHANGELOG.md
+git commit -m "chore: changelog and version bump for v<X>.<Y>.<Z>-beta.<N>"
 git tag -a v<X>.<Y>.<Z>-beta.<N> -m "v<X>.<Y>.<Z>-beta.<N> — <summary>"
-git push origin main v<X>.<Y>.<Z>-beta.<N>
-gh release create v<X>.<Y>.<Z>-beta.<N> --target main --title "v<X>.<Y>.<Z>-beta.<N> — <summary>"
+git push origin pre-release v<X>.<Y>.<Z>-beta.<N>
+gh release create v<X>.<Y>.<Z>-beta.<N> --target pre-release --prerelease --title "v<X>.<Y>.<Z>-beta.<N> — <summary>"
 ```
 
-**Step 3 — Stable release (optional, on main)**
+**Step 2 — Stable release (pre-release → main)**
 
-When the project is ready for a stable release, promote the latest beta:
+When the beta has settled, promote it to stable:
 
 ```bash
 git checkout main
-# Update pkg/version/version.go: drop -beta.N suffix (e.g. v1.4.3-beta.1 → v1.4.3)
-# Update CHANGELOG.md: rename [vX.Y.Z-beta.N] → [vX.Y.Z], update comparison URLs
+git merge pre-release --ff-only   # if diverged (e.g. prior changelog commits on main), use --no-ff merge instead
+```
+
+Before tagging, verify:
+
+1. `pkg/version/version.go` 中的 `Version` 常數已去掉 `-beta.N` 後綴（例如 `v1.4.4-beta.1` → `v1.4.4`）。
+2. `CHANGELOG.md` 中的 `[v<X>.<Y>.<Z>-beta.<N>]` 已改名為 `[v<X>.<Y>.<Z>]`，並更新底部的比較連結。
+
+Commit the promotion, then tag and publish as the Latest release:
+
+```
 git add pkg/version/version.go CHANGELOG.md
 git commit -m "chore: promote v<X>.<Y>.<Z>-beta.<N> to stable v<X>.<Y>.<Z>"
 git tag -a v<X>.<Y>.<Z> -m "v<X>.<Y>.<Z> — <summary>"
 git push origin main v<X>.<Y>.<Z>
-gh release create v<X>.<Y>.<Z> --target main --title "v<X>.<Y>.<Z> — <summary>"
+gh release create v<X>.<Y>.<Z> --target main --latest --title "v<X>.<Y>.<Z> — <summary>"
 ```
 
-**Important:** `go install ...@latest` ignores pre-release tags (`-alpha.N`, `-beta.N`). A stable tag is needed for `@latest` to resolve to the current version. Without one, `@latest` falls back to the last stable tag (e.g. `v0.2.0`).
+**Important:** `go install ...@latest` ignores pre-release tags (`-beta.N`). A stable tag on `main` is needed for `@latest` to resolve to the current version. Without one, `@latest` falls back to the last stable tag (e.g. `v0.2.0`).
 
 ### Version numbering
 
@@ -231,31 +226,27 @@ gh release create v<X>.<Y>.<Z> --target main --title "v<X>.<Y>.<Z> — <summary>
 | **Y** (minor) | Feature updates |
 | **Z** (patch) | Bug fixes + small adjustments |
 
-Pre-release suffix: `-beta.<N>` (on main), `-alpha.<N>` (on pre-release). N starts at 1 per base version.
+Pre-release suffix: `-beta.<N>` (on `pre-release` only). N starts at 1 per base version. Stable tags on `main` carry no suffix.
 
 ### CHANGELOG
 
-Only beta and stable releases get changelog entries (they're the user-facing releases). Each entry summarizes the features and fixes accumulated since the last release. Alpha releases do not get separate changelog entries.
+Both the beta (on `pre-release`) and the stable promotion (on `main`) are user-facing, so the changelog entry is written once at beta time and renamed at promotion. Each entry summarizes the features and fixes accumulated since the last release.
 
-When a release is published, edit `CHANGELOG.md`:
+At **beta** time, edit `CHANGELOG.md`:
 
-1. Rename `## [Unreleased]` → `## [v<X>.<Y>.<Z>]` (or `[v<X>.<Y>.<Z>-beta.<N>]`).
+1. Rename `## [Unreleased]` → `## [v<X>.<Y>.<Z>-beta.<N>]`.
 2. Insert a fresh `## [Unreleased]` section at the top.
-3. Add a summary of what this release contains under `### Added`, `### Fixed`, `### Changed`, `### Breaking`.
+3. Add a summary under `### Added`, `### Fixed`, `### Changed`, `### Breaking`.
 4. Update the comparison URLs at the bottom of the file.
 
-Then commit:
-
-```
-git add CHANGELOG.md && git commit -m "chore: changelog for v<X>.<Y>.<Z>"
-```
+At **stable** promotion, rename `## [v<X>.<Y>.<Z>-beta.<N>]` → `## [v<X>.<Y>.<Z>]` and refresh the comparison URLs (this lands in the promotion commit from Step 2).
 
 ### Key rules
 
 - `pkg/version/version.go` stores the *current* version constant.
-- Bump the version in a separate commit before tagging.
+- Each branch owns one tier: `main` → stable (`vX.Y.Z`, `--latest`), `pre-release` → beta (`vX.Y.Z-beta.N`, `--prerelease`). No alpha tier.
 - Always ask before pushing tags or releases — pushing is a shared-state operation.
-- `gh release create` targets `main` for beta/stable, `pre-release` for alpha.
+- `gh release create` targets `pre-release` (with `--prerelease`) for betas, `main` (with `--latest`) for stable.
 
 ---
 
