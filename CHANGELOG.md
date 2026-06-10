@@ -12,23 +12,9 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ## [Unreleased]
 
-### Added
+## [v1.5.0-beta.4] — 2026-06-10
 
-- **Swarm ops polish (RP-18).** Three day-2 gaps closed: (1) `evva service
-  install-unit` writes a launchd plist (macOS) or systemd user unit (Linux)
-  pointing at the new `evva service start --foreground` mode, so a crashed or
-  rebooted host comes back by itself and the swarm resumes — setup runbook at
-  `docs/user-guide/{en,zh-tw}/service-autostart.md`, linked from the README.
-  (2) `GET /healthz` now answers JSON — `status`, `version`, `uptimeSecs`,
-  `spacesRunning/Stopped`, `membersActive/Frozen` — still unauthenticated and
-  deliberately name-free, so one curl tells "alive but idle" from "in
-  service". (3) The swarm's cron dialect is documented (user guide §11, zh/en)
-  and the parser now rejects unsupported syntax BY NAME: seconds fields,
-  `@daily`-style aliases, `L`/`W`/`#`/`?` specials, and `TZ=` prefixes.
-
-## [v1.5.0-beta.1] — 2026-06-10
-
-Veronica wave 4 — operational hardening (RP-13..RP-17). Supersedes the
+Veronica wave 4 — operational hardening (RP-13..RP-18). Supersedes the
 unpromoted v1.4.5 betas; their content (alarm tools, timezone discipline) is
 folded in below, so this entry is cumulative since v1.4.4.
 
@@ -49,6 +35,18 @@ folded in below, so this entry is cumulative since v1.4.4.
   bare timestamps and cron fields are interpreted in (`pkg/common.ZoneLabel`).
 
 ### Added
+
+- **Swarm ops polish (RP-18).** Three day-2 gaps closed: (1) `evva service
+  install-unit` writes a launchd plist (macOS) or systemd user unit (Linux)
+  pointing at the new `evva service start --foreground` mode, so a crashed or
+  rebooted host comes back by itself and the swarm resumes — setup runbook at
+  `docs/user-guide/{en,zh-tw}/service-autostart.md`, linked from the README.
+  (2) `GET /healthz` now answers JSON — `status`, `version`, `uptimeSecs`,
+  `spacesRunning/Stopped`, `membersActive/Frozen` — still unauthenticated and
+  deliberately name-free, so one curl tells "alive but idle" from "in
+  service". (3) The swarm's cron dialect is documented (user guide §11, zh/en)
+  and the parser now rejects unsupported syntax BY NAME: seconds fields,
+  `@daily`-style aliases, `L`/`W`/`#`/`?` specials, and `TZ=` prefixes.
 
 - **Swarm flight recorder + metrics (RP-17).** Every event the web UI sees —
   run/turn lifecycle, tool calls and results, approvals, errors; everything
@@ -1140,8 +1138,8 @@ Initial published tag — Phase 13 SDK split + Phase 14 session storage +
 Phase 15 friday proof of concept. See `EVVA.md` for the per-phase
 deliverables.
 
-[Unreleased]: https://github.com/johnny1110/evva/compare/v1.5.0-beta.1...HEAD
-[v1.5.0-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.4...v1.5.0-beta.1
+[Unreleased]: https://github.com/johnny1110/evva/compare/v1.5.0-beta.4...HEAD
+[v1.5.0-beta.4]: https://github.com/johnny1110/evva/compare/v1.4.4...v1.5.0-beta.4
 [v1.4.4-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.3...v1.4.4-beta.1
 [v1.4.3]: https://github.com/johnny1110/evva/compare/v1.4.2-beta.1...v1.4.3
 [v1.4.3-beta.1]: https://github.com/johnny1110/evva/compare/v1.4.2-beta.1...v1.4.3-beta.1
