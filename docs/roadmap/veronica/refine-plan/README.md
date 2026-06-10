@@ -125,3 +125,31 @@ schedule 欄位）；RP-9（Phase 2）獨立，但與 RP-7 互補（timer 驅動
 | [FE-8](fe-v2/FE-8-a11y-rwd-and-migration.md) | a11y／RWD／收尾＋遷移 | cutover | WCAG AA、RWD、四態、i18n scaffold、**parity checklist＋cutover（embed 切 web2）**。 |
 
 **架構決策（已拍板 2026-06-07）**：Vue 3 + TypeScript + Pinia｜平行新建 `web2/`、達 parity 後汰換 v1（保留並 port 已測純邏輯層）｜完整 8 份 arc。**建議落地序**：FE-1 →（FE-2 ∥ FE-3）→（FE-4 ∥ FE-5 ∥ FE-6）→ FE-7 → FE-8。
+
+---
+
+## 第四波 refine —— 運營硬化（RP-13 ~ RP-18）
+
+> 狀態：**草案 / Draft（待 Johnny 拍板，尚未實作）** ｜ 日期：2026-06-10
+> 觸發：Phase 2（Sunday trading team）24/7 運營一週後的**全面健康檢查**——`-race` 全綠、
+> 覆蓋率 71.7%–90.6%、無 correctness 問題；風險集中在「跑了幾週才會痛」的運營維度：
+> 成本看不到、卡死沒人報、ledger 只增不刪、事件看過即逝。
+> 總綱（含健康檢查結論與 explore track 索引）：[`../health-check-2026-06-10.md`](../health-check-2026-06-10.md)
+> （第三波與第四波之間另有 [RP-11](RP-11-event-routing-and-scoped-lever.md)、
+> [RP-12](RP-12-advice-loop-closure.md) 兩份已落地的獨立 refine，未列前文索引。）
+
+| # | 計畫 | 優先 | 主題 | 一句話 |
+| --- | --- | --- | --- | --- |
+| [RP-13](RP-13-member-usage-metering.md) | 成員用量儀表＋預算熔斷 | **P0** | 成本可觀測 | `ui.Controller` 早有 `Usage()` 出口、swarm 層沒接——list_members/web 顯示 per-member tokens；超日預算自動 Freeze＋通知。 |
+| [RP-14](RP-14-stuck-run-watchdog.md) | Stuck-run watchdog | **P0** | 卡死可見 | busy 超閾值發 stall 事件＋通知（phase-aware：等審批不算卡）；可選 hard timeout 自動 cancel——取消不丟信（unclaim 重投既有保障）。 |
+| [RP-15](RP-15-webapi-auth-hardening.md) | WebAPI 認證硬化 | P1 | 安全邊界 | 兌現 `service.go:58` minted-token TODO；非 loopback 顯式 opt-in＋強制 token；webhook 可選 secret（向後相容）。 |
+| [RP-16](RP-16-ledger-retention.md) | Ledger retention | P1 | 只增不刪 | 已讀且過期的 messages / completed tasks 先歸檔（jsonl.gz）再清；`evva swarm vacuum` ＋ 每日自動；活資料絕不動。 |
+| [RP-17](RP-17-durable-event-log.md) | Durable event log ＋ metrics | P2 | 事後可查 | publish 旁路落日切 jsonl（永不回壓 pump）＋ wake/run/abort counters 與 metrics endpoint；是 EX-4 replay 的地基。 |
+| [RP-18](RP-18-ops-polish.md) | Ops 收口 | P2 | 雜項 | cron 方言文件化、launchd/systemd 自動重啟模板、`/healthz` 擴充。 |
+
+**建議落地序**：RP-13 → RP-14 →（RP-15 ∥ RP-16）→ RP-17 → RP-18。
+
+**與前三波的關係**：第一波讓團隊**不卡死**、第二波讓團隊**跑得久管得動**、第三波讓 operator
+**看得清**；第四波讓這一切**運營得起**——成本、卡死、增長、審計。另起的
+[explore track（EX-1~6）](../explore/README.md) 則把運營中長出來的模式（外部記憶、遠端
+persona、replay 評測…）以 spike 先行驗證，成功才升級成 RP。
