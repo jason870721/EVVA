@@ -14,6 +14,7 @@ package service
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,13 +52,23 @@ import (
 // be reachable off-box by default.
 const DefaultAddr = "127.0.0.1:8888"
 
-// DefaultToken is the fixed session token while the project is pre-1.0 and the
-// service is loopback-only: a memorable "root" the operator types once, instead
-// of copy-pasting a freshly minted UUID every restart. This is a deliberate
-// test-convenience tradeoff, safe because the host binds 127.0.0.1 (DefaultAddr).
-// TODO(security): before any non-loopback exposure, replace with a minted
-// per-start secret (or real auth) — see docs/roadmap/veronica/veronica-design-v1.md §8.3.
-const DefaultToken = "root"
+// IsLoopbackAddr reports whether a bind/peer address stays on this machine:
+// the host part must be a loopback IP or "localhost". An empty or wildcard
+// host (":8888", "0.0.0.0:8888", "[::]:8888") binds every interface and is
+// NOT loopback — exposing it requires the explicit --allow-remote opt-in
+// (RP-15), because a reachable service token is operator power over a host
+// whose agents run shell.
+func IsLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr // no port part — classify the whole string as the host
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // manifestFile is the per-workdir swarm declaration `evva swarm .` reads.
 const manifestFile = "evva-swarm.yml"
@@ -66,7 +77,11 @@ const manifestFile = "evva-swarm.yml"
 type Service struct {
 	addr  string
 	token string
-	log   *slog.Logger
+	// allowRemote permits a non-loopback bind AND switches the loopback-trust
+	// conveniences off (no FE token bootstrap, no secretless webhooks) — see
+	// SetAllowRemote (RP-15).
+	allowRemote bool
+	log         *slog.Logger
 
 	hub *webapi.Hub
 	srv *http.Server
@@ -116,7 +131,9 @@ type spaceEntry struct {
 	super    *swarm.Supervisor
 	cancel   context.CancelFunc // stops the supervisor's run loops + timer tick
 	stopPump chan struct{}      // closed after Shutdown so the pump drains then exits
+	pumpDone chan struct{}      // closed BY the pump when it exits — teardown waits on it
 	pending  *gateTracker       // outstanding approval/question gates, for reconnect replay
+	events   *eventLog          // RP-17 durable event mirror; nil when event_log: false
 }
 
 // live reports whether the entry currently has a running space behind it.
@@ -189,8 +206,11 @@ func (g *gateTracker) snapshot() []event.Event {
 }
 
 // New builds the host bound (logically) to addr. An empty addr uses
-// DefaultAddr. A session token is minted now and required on every /api + /ws
-// request. Call Listen then Serve (Serve calls Listen if you skip it).
+// DefaultAddr. A session token is minted now — a fresh UUID per start (RP-15;
+// the fixed pre-1.0 "root" is gone) — and required on every /api + /ws
+// request. The daemon persists it to <stateDir>/token (0600) for the CLI;
+// loopback browsers fetch it via GET /api/auth/bootstrap; rotation = restart.
+// Call Listen then Serve (Serve calls Listen if you skip it).
 func New(addr string) *Service {
 	if addr == "" {
 		addr = DefaultAddr
@@ -198,7 +218,7 @@ func New(addr string) *Service {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	s := &Service{
 		addr:       addr,
-		token:      DefaultToken,
+		token:      common.GenUUID(),
 		log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		hub:        webapi.NewHub(),
 		rootCtx:    rootCtx,
@@ -223,9 +243,21 @@ func defaultLoadConfig(workdir string) (*config.Config, error) {
 	return config.Load(config.LoadOptions{WorkDir: workdir})
 }
 
-// Token is the session token clients must present. Printed to the terminal on
-// start so a local user can authenticate the browser.
+// Token is the session token clients must present. The daemon writes it to
+// the token file on start; local clients (CLI, FE bootstrap) read it from
+// there, remote ones get it from the operator out of band.
 func (s *Service) Token() string { return s.token }
+
+// SetAllowRemote opts the host into non-loopback binds (RP-15). Without it,
+// Listen refuses any addr whose host is not loopback. With it, the loopback
+// trust conveniences shut off — the FE token bootstrap endpoint disappears and
+// webhooks from non-loopback peers demand the space's webhook_secret — so
+// every remote caller must authenticate. Call before Listen.
+func (s *Service) SetAllowRemote(v bool) { s.allowRemote = v }
+
+// AllowRemote satisfies webapi.Backend: the router uses it to gate the
+// loopback-only token bootstrap endpoint off in remote mode.
+func (s *Service) AllowRemote() bool { return s.allowRemote }
 
 // SetLogger swaps the host's structured logger (SPRD-1-9 wires the daemon log).
 func (s *Service) SetLogger(l *slog.Logger) {
@@ -247,6 +279,9 @@ func (s *Service) Listen() error {
 	defer s.mu.Unlock()
 	if s.ln != nil {
 		return nil
+	}
+	if !s.allowRemote && !IsLoopbackAddr(s.srv.Addr) {
+		return fmt.Errorf("swarm: refusing non-loopback bind %q — the service token is operator power over a host whose agents run shell (invariant #6); pass --allow-remote to expose it anyway", s.srv.Addr)
 	}
 	ln, err := net.Listen("tcp", s.srv.Addr)
 	if err != nil {
@@ -322,6 +357,14 @@ func teardownSpace(ent *spaceEntry) {
 	}
 	if ent.stopPump != nil {
 		close(ent.stopPump) // pump does a final drain, then exits
+	}
+	if ent.events != nil {
+		// Only close the event log once the pump has actually exited — Offer on
+		// a closed channel would panic, and the final drain above runs async.
+		if ent.pumpDone != nil {
+			<-ent.pumpDone
+		}
+		ent.events.Close()
 	}
 }
 
@@ -407,14 +450,23 @@ func (s *Service) register(id, name string, m agentdef.Manifest, loaded []agentd
 	super.Start(spaceCtx)
 
 	stopPump := make(chan struct{})
+	pumpDone := make(chan struct{})
+	var events *eventLog
+	if m.Settings.EventLog {
+		events = newEventLog(sp.Workdir, m.Settings.RetentionDays)
+	}
 	s.mu.Lock()
 	s.spaces[id] = &spaceEntry{
 		id: id, name: name, workdir: sp.Workdir, status: statusRunning,
-		space: sp, super: super, cancel: cancel, stopPump: stopPump, pending: newGateTracker(),
+		space: sp, super: super, cancel: cancel, stopPump: stopPump, pumpDone: pumpDone,
+		pending: newGateTracker(), events: events,
 	}
 	s.mu.Unlock()
 
-	go s.pump(sp, stopPump)
+	go func() {
+		defer close(pumpDone)
+		s.pump(sp, stopPump)
+	}()
 	s.persistSpaces()
 	s.log.Info("swarm: space registered", "id", id, "name", name, "workdir", sp.Workdir, "members", len(loaded))
 	return id, nil
@@ -438,9 +490,10 @@ func (s *Service) StopSpace(ref string) error {
 	}
 	// Flip to stopped and detach the live handles UNDER the lock, so a concurrent
 	// reader never observes a half-torn-down running space; tear them down after.
-	live := &spaceEntry{cancel: ent.cancel, super: ent.super, space: ent.space, stopPump: ent.stopPump}
+	live := &spaceEntry{cancel: ent.cancel, super: ent.super, space: ent.space,
+		stopPump: ent.stopPump, pumpDone: ent.pumpDone, events: ent.events}
 	ent.status = statusStopped
-	ent.space, ent.super, ent.cancel, ent.stopPump, ent.pending = nil, nil, nil, nil, nil
+	ent.space, ent.super, ent.cancel, ent.stopPump, ent.pumpDone, ent.pending, ent.events = nil, nil, nil, nil, nil, nil, nil
 	id, name := ent.id, ent.name
 	s.mu.Unlock()
 
@@ -503,7 +556,8 @@ func (s *Service) RemoveSpace(ref string) error {
 		return fmt.Errorf("swarm: unknown space %q", ref)
 	}
 	delete(s.spaces, ent.id)
-	live := &spaceEntry{cancel: ent.cancel, super: ent.super, space: ent.space, stopPump: ent.stopPump}
+	live := &spaceEntry{cancel: ent.cancel, super: ent.super, space: ent.space,
+		stopPump: ent.stopPump, pumpDone: ent.pumpDone, events: ent.events}
 	id, name := ent.id, ent.name
 	s.mu.Unlock()
 
@@ -543,7 +597,8 @@ func (s *Service) ResetSpace(ref string) (string, error) {
 	// DB so its files are free to delete) and drop it from the registry. Detach
 	// the live handles under the lock; teardown is a no-op when already stopped.
 	s.mu.Lock()
-	live := &spaceEntry{cancel: ent.cancel, super: ent.super, space: ent.space, stopPump: ent.stopPump}
+	live := &spaceEntry{cancel: ent.cancel, super: ent.super, space: ent.space,
+		stopPump: ent.stopPump, pumpDone: ent.pumpDone, events: ent.events}
 	delete(s.spaces, id)
 	s.mu.Unlock()
 	teardownSpace(live)
@@ -729,7 +784,8 @@ func (s *Service) pump(sp *swarm.SwarmSpace, stop <-chan struct{}) {
 }
 
 // publish records gate lifecycle for reconnect replay, then marshals one spaced
-// event and fans it out by (spaceID, AgentID).
+// event, mirrors it into the durable event log, and fans it out by
+// (spaceID, AgentID).
 func (s *Service) publish(e swarm.SpacedEvent) {
 	if pending, ok := s.pendingFor(e.SpaceID); ok {
 		pending.observe(e.Event)
@@ -738,7 +794,29 @@ func (s *Service) publish(e swarm.SpacedEvent) {
 	if err != nil {
 		return
 	}
+	// RP-17: every event except token-level stream chunks — those would dwarf
+	// the file with text the member transcripts already hold. Offer never
+	// blocks, so the log can't slow this pump.
+	if e.Event.Kind != event.KindTextChunk && e.Event.Kind != event.KindThinkingChunk {
+		if log, ok := s.eventLogFor(e.SpaceID); ok {
+			log.Offer(payload)
+		}
+	}
 	s.hub.Publish(e.SpaceID, e.Event.AgentID, payload)
+}
+
+// eventLogFor returns a live space's event log, read under the registry lock
+// for the same reason as pendingFor: StopSpace detaches the field under the
+// write lock, and the returned logger is safe to use after release (teardown
+// waits for the pump to exit before closing it).
+func (s *Service) eventLogFor(ref string) (*eventLog, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e := s.resolveLocked(ref)
+	if !e.live() || e.events == nil {
+		return nil, false
+	}
+	return e.events, true
 }
 
 // wireEvent is the JSON envelope pushed over the WebSocket: the raw agent
@@ -860,6 +938,10 @@ func (s *Service) Roster(id string) ([]webapi.MemberInfo, bool) {
 			WhenToUse:     v.WhenToUse,
 			ContextTokens: ctxUsed,
 			ContextLimit:  ctxLimit,
+			TokensIn:      v.Usage.InputTokens,
+			TokensOut:     v.Usage.OutputTokens,
+			TokensToday:   v.DailyTokens,
+			TokensBudget:  ent.space.BudgetFor(v.Name),
 		}
 		// Schedule lives in the space's map (RP-7 didn't put it on MemberView);
 		// surface it on the wire so the roster card can show/edit the crontab (RP-8).
@@ -1309,9 +1391,14 @@ const maxEventDataChars = 4000
 // wake/fold drives the leader (idle → drain A, busy → drain B). `to` defaults to
 // the leader; the message is sender "webhook" and time-stamped so the leader sees
 // it as an external trigger. An idempotency key collapses retries (duplicate ==
-// true, same id, no second wake). Errors carry "unknown space" / "stopped" so the
-// (unauthenticated) handler can map 404 / 409; anything else is 400.
-func (s *Service) IngestEvent(ref string, evt webapi.EventIn) (messageID string, duplicate bool, err error) {
+// true, same id, no second wake). Errors carry "unauthorized" / "unknown space" /
+// "stopped" so the handler can map 401 / 404 / 409; anything else is 400.
+//
+// Auth (RP-15): a space with settings.webhook_secret demands a matching secret
+// from EVERY caller; without one, loopback peers keep the RP-9 trust and
+// non-loopback peers are rejected — so --allow-remote can't silently expose an
+// unauthenticated wake-the-leader endpoint to the network.
+func (s *Service) IngestEvent(ref string, evt webapi.EventIn, auth webapi.EventAuth) (messageID string, duplicate bool, err error) {
 	ent, ok := s.entry(ref)
 	if !ok {
 		s.mu.RLock()
@@ -1321,6 +1408,13 @@ func (s *Service) IngestEvent(ref string, evt webapi.EventIn) (messageID string,
 			return "", false, fmt.Errorf("swarm: space %q is stopped", ref)
 		}
 		return "", false, fmt.Errorf("swarm: unknown space %q", ref)
+	}
+	if secret := ent.space.WebhookSecret(); secret != "" {
+		if subtle.ConstantTimeCompare([]byte(secret), []byte(auth.Secret)) != 1 {
+			return "", false, fmt.Errorf("swarm: unauthorized: webhook secret mismatch (header %s)", webapi.WebhookSecretHeader)
+		}
+	} else if !auth.Loopback {
+		return "", false, fmt.Errorf("swarm: unauthorized: remote event POST requires settings.webhook_secret on this space")
 	}
 	if strings.TrimSpace(evt.Body) == "" {
 		return "", false, fmt.Errorf("swarm: event body is required")
@@ -1381,6 +1475,70 @@ func (s *Service) HaltAll(id string) error {
 		return fmt.Errorf("swarm: unknown space %q", id)
 	}
 	return ent.super.HaltAll()
+}
+
+// Metrics snapshots a space's scheduler counters (RP-17): per-member wakes /
+// runs / aborts / run-duration buckets from the space, hint drops from the
+// bus, and the event log's logged/dropped line counts. Reads the entry's
+// fields under the registry lock (StopSpace detaches them under the write
+// lock). false when the ref is unknown or stopped.
+func (s *Service) Metrics(ref string) (webapi.MetricsInfo, bool) {
+	s.mu.RLock()
+	ent := s.resolveLocked(ref)
+	if !ent.live() {
+		s.mu.RUnlock()
+		return webapi.MetricsInfo{}, false
+	}
+	sp, events := ent.space, ent.events
+	s.mu.RUnlock()
+
+	members, started := sp.MetricsSnapshot()
+	mi := webapi.MetricsInfo{
+		HintsDropped: sp.Bus.HintsDropped(),
+		Members:      make(map[string]webapi.MemberMetricsInfo, len(members)),
+	}
+	if !started.IsZero() {
+		mi.UptimeSecs = int64(time.Since(started).Seconds())
+	}
+	if events != nil {
+		mi.EventsLogged, mi.EventsDropped = events.Logged(), events.Dropped()
+	}
+	for name, m := range members {
+		mi.Members[name] = webapi.MemberMetricsInfo{
+			WakesMessage: m.WakesMessage,
+			WakesTimer:   m.WakesTimer,
+			Runs:         m.Runs,
+			Aborts:       m.Aborts,
+			RunSeconds: map[string]int64{
+				"lt10s": m.RunSeconds[0], "lt1m": m.RunSeconds[1],
+				"lt10m": m.RunSeconds[2], "gte10m": m.RunSeconds[3],
+			},
+		}
+	}
+	return mi, true
+}
+
+// Vacuum runs one RP-16 retention pass for a space right now (the manual
+// entrance — the supervisor also sweeps daily). days <= 0 resolves to the
+// space's configured retention_days, or the default when the space disabled
+// retention — an explicit operator request overrides "off". dryRun reports the
+// would-be counts without archiving or deleting anything.
+func (s *Service) Vacuum(ref string, days int, dryRun bool) (webapi.VacuumStats, error) {
+	ent, ok := s.entry(ref)
+	if !ok {
+		return webapi.VacuumStats{}, fmt.Errorf("swarm: unknown space %q", ref)
+	}
+	if days <= 0 {
+		days = ent.space.RetentionDays()
+		if days <= 0 {
+			days = agentdef.DefaultRetentionDays
+		}
+	}
+	st, err := ent.space.Store.Vacuum(time.Now().AddDate(0, 0, -days), dryRun)
+	if err != nil {
+		return webapi.VacuumStats{}, fmt.Errorf("swarm: vacuum %q: %w", ref, err)
+	}
+	return webapi.VacuumStats{Messages: st.Messages, Tasks: st.Tasks, Files: st.Files, Days: days, DryRun: dryRun}, nil
 }
 
 // superCmd routes a one-member supervisor command, surfacing an "unknown space"

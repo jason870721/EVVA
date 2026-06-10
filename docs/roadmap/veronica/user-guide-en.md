@@ -156,6 +156,14 @@ workers:
 settings:
   permission_mode: default  # default | accept_edits | plan | bypass
   max_iterations: 50        # per-run loop cap for each member
+  # —— operational fuses (opt-in; see §8) ——
+  # daily_budget_tokens: 2000000  # per-member daily token cap (in+out); 0/omit = unlimited
+  # budget_stay_frozen: false     # true = a budget freeze survives the day rollover
+  # stall_threshold: 10m          # alert when a member is busy longer; "0" off (omit = 10m)
+  # stall_hard_timeout: 30m       # auto-cancel a run busy longer; 0/omit = off
+  # webhook_secret: "hunter2"     # require X-Evva-Webhook-Secret on event POSTs (see §10)
+  # retention_days: 30            # archive+delete consumed history after N days; "0" = keep forever
+  # event_log: true               # mirror events to .vero/events/ (daily jsonl); false = off
 ```
 
 - **Member names are unique** within a space (no replicas — give each a distinct
@@ -232,8 +240,10 @@ effort: medium
 when_to_use: "Backend: APIs, DB schema, migrations, server tests."
 # Optional: wake on a timer to self-check (cron OR every, pick one):
 # schedule:
-#   cron: "*/5 * * * *"     # every 5 minutes
+#   cron: "*/5 * * * *"     # every 5 minutes (cron matches the system's LOCAL timezone)
 #   # every: "30s"          # or a fixed interval
+# Optional: per-member token budget override (see §8): >0 own cap, -1 exempt, omit = inherit
+# budget_tokens: 250000
 ```
 
 `agents/sub/backend-dev/tools/active.yml` — the real work tools a coder needs
@@ -363,6 +373,130 @@ From the **web roster** you can, per member:
   later (its unread work is reprocessed).
 - **Halt all** — the emergency stop: cancel every in-flight run in the space.
 
+### Cost & stall fuses (token budget / run watchdog)
+
+A team running 24/7 needs two fuses. Both live under `settings:` in
+`evva-swarm.yml`, apply per space, and stay fully out of the way until set.
+
+**Daily token budget (the budget breaker)**
+
+```yaml
+settings:
+  daily_budget_tokens: 2000000   # per-member in+out token cap per LOCAL day; 0 = unlimited
+  budget_stay_frozen: false      # true = the freeze survives the day rollover (manual unfreeze)
+workers:
+  - agent: watchdog
+    budget_tokens: -1            # per-member override: >0 own cap; -1 exempt; omit = inherit
+```
+
+- A member that crosses the line at the end of a run is **frozen automatically**;
+  the leader and you (web inbox / Timeline) each get a `⚠️ budget breaker`
+  notice.
+- Its mailbox keeps queuing — nothing is lost — and it **auto-unfreezes when the
+  local day rolls over** (unless `budget_stay_frozen`).
+- Unfreezing it from the roster is an operator override: if it is still over
+  budget it re-trips after its next run (one more notice), so raise the budget
+  if you really mean "keep going".
+- Usage is always visible: the leader's `list_members` shows
+  `tok in 1.2M out 345k, today 89k/500k` per member, and the web roster API
+  carries `tokensIn / tokensOut / tokensToday / tokensBudget`. Counters and
+  breaker state persist — **restarting the service does not reset the day's
+  spend**.
+
+**Stall watchdog (hang alerts / auto-cancel)**
+
+```yaml
+settings:
+  stall_threshold: 10m      # busy longer than this (and not waiting on a human) → alert; "0" off
+  stall_hard_timeout: 0     # busy longer than this → cancel the run; 0/omit = off (tune alerts first)
+```
+
+- A member **busy** past `stall_threshold` — a hung LLM call, a wedged tool, or
+  a genuinely long task — sends you and the leader one `⏳ stall` notice, **at
+  most once per run**.
+- Waiting on a human doesn't count: the waiting-approval / waiting-input /
+  paused phases are exempt.
+- With `stall_hard_timeout` set, an over-time run is cancelled: its claimed mail
+  returns to unread and retries on the next wake — **no work is lost**; if the
+  same work hangs again it alerts and cancels again.
+- If the leader itself stalls, you still get the notice.
+
+**Time & timezones (since v1.4.5-beta.2)**
+
+- Every timestamp injected into a member — `currenttime`, event stamps, mail
+  `[sent …]` markers, alarm echoes — carries an explicit UTC offset, e.g.
+  `2026-06-10 20:25:00 +08:00`.
+- Bare time strings (e.g. `alarm_set`) parse in the **system's local timezone**;
+  to express UTC use RFC3339 (`2026-06-10T12:25:00Z`) — the confirmation echoes
+  the UTC twin, so a timezone mix-up is visible at a glance.
+- Cron (the manifest's `schedule` and the leader's `schedule_set`) matches the
+  system's local wall clock.
+
+### Ledger retention (`retention_days` / `evva swarm vacuum`)
+
+A 24/7 swarm accumulates messages and completed tasks without bound, and the
+web/API reads slow down with the table size. Retention keeps the working set
+small **without losing history**: eligible rows are first appended to
+`<workdir>/.vero/archive/YYYY-MM.jsonl.gz` (bucketed by the row's own month),
+then deleted and the database compacted.
+
+What is eligible — and nothing else ever is:
+
+- messages already **read**, where the read happened ≥ `retention_days` ago;
+- tasks in the terminal **completed** state for ≥ `retention_days` —
+  unless something that survives still references them (a message's
+  `ref_task`, a child task's parent link): referenced tasks are kept.
+
+Unread mail, claimed (in-flight) mail, and pending/running/suspended/verifying
+tasks are untouchable, regardless of age.
+
+It runs automatically **once per local day** (plus once at service start, to
+catch up a machine that slept through midnight) whenever
+`settings.retention_days` > 0 — the default is **30**; set `"0"` to keep the
+old never-delete behavior. Manually, with a preview:
+
+```bash
+evva swarm vacuum my-eng-team --dry-run     # counts only, touches nothing
+evva swarm vacuum my-eng-team               # archive + delete at the configured window
+evva swarm vacuum my-eng-team --days 7      # override the window for this pass
+```
+
+Reading the archive later: it is gzipped JSON-lines —
+`zcat .vero/archive/2026-06.jsonl.gz | jq .` (each line carries `kind`
+message/task plus the full original row). For scale: a 100k-message backlog
+makes the messages API take ~300 ms per call; after a vacuum it is back to
+sub-millisecond, and the pass itself took ~1.2 s.
+
+### Flight recorder & metrics (event log / `/metrics`)
+
+Every event the web UI sees (run/turn lifecycle, tool calls + results,
+approvals, errors — everything except token-level streaming chunks) is also
+appended to `<workdir>/.vero/events/YYYY-MM-DD.jsonl`, one ts-stamped JSON
+line each. "What happened at 03:00 last night?" is now a grep, even after a
+restart:
+
+```bash
+grep '03:0' .vero/events/2026-06-09.jsonl | jq '.event.event.Kind' | sort | uniq -c
+```
+
+Files rotate daily; old days are pruned by the same `retention_days` window
+(`"0"` keeps them forever). `event_log: false` switches the recorder off. The
+recorder can never slow the swarm: it drops lines (and counts the drops)
+rather than ever blocking the event pump.
+
+Live counters, per member, since the space started:
+
+```bash
+curl -s -H "Authorization: Bearer $(cat ~/.evva/service/token)" \
+  http://127.0.0.1:8888/api/swarm/<ref>/metrics | jq .
+```
+
+returns `uptimeSecs`, `eventsLogged` / `eventsDropped` (the recorder),
+`hintsDropped` (mailbox backpressure — a climbing value means a chronically
+backed-up member), and per-member `wakesMessage` / `wakesTimer` / `runs` /
+`aborts` plus a run-duration histogram (`runSeconds`: lt10s / lt1m / lt10m /
+gte10m). Plain JSON — point your own exporter at it if you want history.
+
 ### Restart & resume
 
 The swarm is crash-safe. After `evva service stop` (or a crash) and a fresh
@@ -400,11 +534,59 @@ Stopping one never affects the other.
 - The service binds **`127.0.0.1` only** by default — it is not reachable from
   other machines. (Agents run shell and edit files, so the workstation is
   effectively remote-code-execution; keep it on loopback.)
-- Every web/API request needs the **session token** (printed on start, stored at
-  `~/.evva/service/token`). The browser asks you to paste it once.
+- Every web/API request needs the **session token**. Since v1.5 it is a random
+  secret minted on every `evva service start` (the fixed dev token `root` is
+  gone), stored at `~/.evva/service/token` (0600). You normally never see it:
+  a browser on the same machine logs in by itself (a loopback-only bootstrap
+  endpoint hands it over), and the CLI reads the file. Rotation = restart.
 - In `permission_mode: default`, write/shell-class tools route through the
   approval overlay — you stay in the loop. Use `bypass` only when you trust the
   task and the workdir.
+
+### Exposing the workstation beyond this machine (`--allow-remote`)
+
+By default a non-loopback bind **refuses to start**. To reach the workstation
+from another device (LAN or behind a reverse proxy), opt in explicitly:
+
+```bash
+evva service start --addr 0.0.0.0:8888 --allow-remote
+```
+
+Know the threat model before you do: **whoever presents the session token is
+the operator** — they can approve tool calls, message members, and therefore
+run shell on this machine. In remote mode the loopback conveniences shut off:
+
+- The FE auto-login bootstrap endpoint disappears (behind a proxy every caller
+  would look local). Paste the token from `~/.evva/service/token` once per
+  device, per service start.
+- Webhook POSTs from other hosts are rejected unless the target space sets
+  `settings.webhook_secret` (below).
+
+Put TLS termination and any IP filtering in your reverse proxy — the service
+itself stays plain HTTP and single-operator (no accounts, no RBAC).
+
+### External-event webhook + `webhook_secret`
+
+External apps can wake a member (default: the leader) by POSTing an event —
+no session token involved:
+
+```bash
+curl -X POST http://127.0.0.1:8888/api/swarm/<space-id>/event \
+  -H 'Content-Type: application/json' \
+  -H 'X-Evva-Webhook-Secret: hunter2' \
+  -d '{"title":"BTC spike","body":"vol>3sigma","source":"trader-engine",
+       "idempotency_key":"evt-123"}'
+```
+
+Auth rules (RP-15):
+
+| Space setting | Local caller (same machine) | Remote caller |
+| --- | --- | --- |
+| no `webhook_secret` | accepted (legacy loopback trust) | **401** |
+| `webhook_secret` set | needs the matching header | needs the matching header |
+
+Replies: new → 202, duplicate `idempotency_key` → 200, bad/missing secret →
+401, unknown space → 404, stopped → 409. Bodies are capped at 64 KB.
 
 ---
 
@@ -414,13 +596,14 @@ Stopping one never affects the other.
 
 | Command | What it does |
 | --- | --- |
-| `evva service start` | Start the `:8888` host as a background daemon (prints the token). |
+| `evva service start` | Start the `:8888` host as a background daemon (mints + stores the token). Flags: `--addr <host:port>`, `--allow-remote` (required for any non-loopback addr). |
 | `evva service status` | Report running/stopped, pid, address, token location. |
 | `evva service stop` | Stop the daemon (spaces are preserved for the next start). |
 | `evva swarm .` | Register the current directory's `evva-swarm.yml` as a new space. |
 | `evva swarm ls` | List registered spaces. |
 | `evva swarm stop <id>` | Stop (and drop) one space. |
 | `evva swarm add <id> <member>` | Hot-load a worker (`agents/sub/<member>/`) into a space. |
+| `evva swarm vacuum <ref> [--days N] [--dry-run]` | Archive-then-delete consumed history (RP-16); dry-run previews. |
 
 ### Environment variables
 
@@ -428,6 +611,7 @@ Stopping one never affects the other.
 | --- | --- |
 | `EVVA_SERVICE_ADDR` | Override the listen/target address (default `127.0.0.1:8888`). |
 | `EVVA_SERVICE_HOME` | Override the runtime dir (default `<AppHome>/service/`: pidfile, token, addr, log). |
+| `EVVA_SERVICE_ALLOW_REMOTE` | `1` = allow a non-loopback bind (what `--allow-remote` sets for the daemon child). |
 
 ### Runtime files (`~/.evva/service/`)
 

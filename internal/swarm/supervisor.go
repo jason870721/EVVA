@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/johnny1110/evva/internal/swarm/agentdef"
@@ -33,6 +34,12 @@ type Supervisor struct {
 
 	tickInterval   time.Duration
 	rescanInterval time.Duration
+
+	// vacuumDay is the local day ("2006-01-02") the last retention pass ran
+	// for — only the tick goroutine reads/writes it. vacuumBusy stops a new
+	// pass while a slow one (VACUUM) is still holding the store lock (RP-16).
+	vacuumDay  string
+	vacuumBusy atomic.Bool
 
 	// mu guards members + each member's schedule/nextDue (only the tick touches
 	// those). A member's volatile run state (suspended/cancelRun) is guarded by
@@ -245,6 +252,10 @@ func (s *Supervisor) Unfreeze(name string) error {
 		return fmt.Errorf("swarm: unfreeze: unknown member %q", name)
 	}
 	s.sp.Roster.setMembership(name, MembershipActive)
+	// An unfreeze overrides the budget breaker too (RP-13): clear its mark so a
+	// still-over-budget member re-trips (once) after its next run instead of
+	// being silently held by a stale mark.
+	s.sp.clearBudgetFrozen(name)
 	s.sp.persistRuntime()
 	if m := s.memberOf(name); m != nil {
 		s.poke(m, wakeMessage)

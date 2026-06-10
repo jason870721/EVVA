@@ -65,6 +65,16 @@ type SwarmSpace struct {
 	agents    map[string]agent.Agent
 	schedules map[string]agentdef.Schedule
 
+	// budgets holds manifest member-level daily-budget overrides (RP-13);
+	// members without an entry inherit settings.DailyBudgetTokens. meter is the
+	// live daily ledger the supervisor feeds at run boundaries (see usage.go).
+	budgets map[string]int
+	meter   usageMeter
+
+	// metrics counts the scheduler lifecycle per member (RP-17). nil on
+	// hand-built spaces — every counting method is nil-safe.
+	metrics *spaceMetrics
+
 	// alarmSched is the space's shared one-shot alarm scheduler (alarm_set /
 	// alarm_clear). Lazy-allocated under mu on first AlarmScheduler() access; a
 	// fired alarm is delivered as a durable bus message to its target member.
@@ -132,6 +142,8 @@ func NewSpace(id string, m agentdef.Manifest, loaded []agentdef.Loaded, ts ToolS
 		out:       make(chan SpacedEvent, eventBuffer),
 		agents:    make(map[string]agent.Agent),
 		schedules: make(map[string]agentdef.Schedule),
+		budgets:   budgetOverrides(m),
+		metrics:   newSpaceMetrics(),
 		reg:       reg,
 		cfg:       cfg,
 		ts:        ts,
@@ -287,6 +299,18 @@ func (sp *SwarmSpace) constructMember(ld agentdef.Loaded) error {
 
 	sp.Bus.Register(name)
 	return nil
+}
+
+// WebhookSecret returns the space's external-event shared secret ("" = unset,
+// RP-9 loopback trust). Exported for the service's webhook auth check (RP-15).
+func (sp *SwarmSpace) WebhookSecret() string {
+	return sp.settings.WebhookSecret // set once at construction, never mutated
+}
+
+// RetentionDays returns the space's ledger retention window in days (0 =
+// retention disabled). Exported for the service's manual vacuum default (RP-16).
+func (sp *SwarmSpace) RetentionDays() int {
+	return sp.settings.RetentionDays // set once at construction, never mutated
 }
 
 // ScheduleFor returns a member's declared timer schedule, if any. Exported so
@@ -514,6 +538,22 @@ func (s *spaceSink) Emit(e event.Event) {
 		}
 	}
 	s.out <- SpacedEvent{SpaceID: s.spaceID, Event: e}
+}
+
+// budgetOverrides collects the manifest's member-level daily-budget overrides
+// (RP-13). Only non-zero entries are kept: 0 means "inherit the space default",
+// so storing it would shadow a later settings change for no reason.
+func budgetOverrides(m agentdef.Manifest) map[string]int {
+	out := make(map[string]int)
+	if m.Leader.BudgetTokens != 0 {
+		out[m.Leader.Agent] = m.Leader.BudgetTokens
+	}
+	for _, w := range m.Workers {
+		if w.BudgetTokens != 0 {
+			out[w.Agent] = w.BudgetTokens
+		}
+	}
+	return out
 }
 
 // ensureMain guarantees "main" is present so a def is constructible as a root

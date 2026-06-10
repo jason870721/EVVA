@@ -34,6 +34,70 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ### Added
 
+- **Swarm flight recorder + metrics (RP-17).** Every event the web UI sees —
+  run/turn lifecycle, tool calls and results, approvals, errors; everything
+  except token-level streaming chunks — is also appended to
+  `<workdir>/.vero/events/YYYY-MM-DD.jsonl` as ts-stamped JSON lines, so
+  "what happened at 03:00 last night" survives restarts and is one grep away.
+  Files rotate daily and prune on the space's `retention_days` window;
+  `settings.event_log: false` switches the recorder off. The recorder can
+  never slow the swarm: a full buffer drops lines and counts them instead of
+  blocking the event pump. New `GET /api/swarm/{id}/metrics` returns live
+  per-member counters — wakes (message/timer), runs, aborts, a run-duration
+  histogram (lt10s/lt1m/lt10m/gte10m) — plus `uptimeSecs`,
+  `eventsLogged`/`eventsDropped`, and `hintsDropped` (mailbox backpressure).
+  Documented in the swarm user guide §8 (zh/en).
+- **Swarm ledger retention (RP-16).** A 24/7 swarm's messages and completed
+  tasks no longer grow without bound: rows whose life is over — messages READ
+  at least `retention_days` ago, tasks COMPLETED at least that long ago and
+  not referenced by anything that survives — are appended to
+  `<workdir>/.vero/archive/YYYY-MM.jsonl.gz` (gzip JSON-lines, readable with
+  `zcat … | jq`) and then deleted, with the database compacted. Unread mail,
+  claimed (in-flight) mail, and active tasks are untouchable regardless of
+  age. Runs automatically once per local day (plus a catch-up pass at service
+  start) when `settings.retention_days` > 0 (default 30; `"0"` keeps the old
+  never-delete behavior), and manually via `evva swarm vacuum <ref>
+  [--days N] [--dry-run]` / `POST /api/swarm/{id}/vacuum`. With a 100k-message
+  backlog the messages API drops from ~300 ms back to sub-millisecond after a
+  pass. Documented in the swarm user guide §8 (zh/en).
+- **Swarm web API auth hardening (RP-15).** The fixed dev session token
+  (`root`) is gone: every `evva service start` mints a random secret, persists
+  it to `~/.evva/service/token` (0600), and the CLI keeps reading that file —
+  while a browser on the same machine now logs in BY ITSELF via the new
+  loopback-only `GET /api/auth/bootstrap` endpoint (it also self-heals a stale
+  stored token after a service restart, since tokens rotate per start).
+  Non-loopback binds refuse to start unless `evva service start --addr …
+  --allow-remote` is given; remote mode kills the bootstrap endpoint (the
+  reverse-proxy guard) so every remote caller must present the minted token.
+  The external-event webhook gains an optional per-space shared secret
+  (`settings.webhook_secret`, header `X-Evva-Webhook-Secret`): when set it is
+  required from everyone; when unset, local callers keep the RP-9 trust and
+  remote callers are rejected — `--allow-remote` can no longer expose an
+  unauthenticated wake endpoint. Documented in the swarm user guide's §10
+  (threat model, LAN exposure how-to, webhook auth matrix; zh/en).
+- **Swarm stuck-run watchdog (RP-14).** A member busy past
+  `settings.stall_threshold` (default 10m; `"0"` disables) raises ONE stall
+  notice per run to the operator and the leader — members waiting on a human
+  (approval / question / paused) are exempt. An optional
+  `settings.stall_hard_timeout` auto-cancels an over-time run: its claimed
+  mail unclaims and retries on the next wake, so no work is lost. Driven by
+  the existing supervisor tick (zero new goroutines); documented with the
+  budget breaker in the swarm user guide's new "Cost & stall fuses" section
+  (zh/en), alongside the manifest's fuse knobs and the time/timezone
+  conventions.
+- **Swarm member usage metering + daily budget breaker (RP-13).** The roster
+  now carries each member's cumulative token usage, last-turn input, and
+  today's spend — measured by the supervisor at run boundaries (race-free) —
+  surfaced in `list_members` (`tok in 1.2M out 345k, today 89k/500k`) and the
+  web roster API (`tokensIn/Out/Today/Budget`). New manifest knobs:
+  `settings.daily_budget_tokens` (per-member daily cap, input+output tokens,
+  local day), per-member `budget_tokens` override (`-1` = exempt), and
+  `settings.budget_stay_frozen`. A member that crosses its cap is FROZEN by
+  the breaker and both the leader and the operator receive a durable notice;
+  the day rollover auto-unfreezes it. Each freeze mark carries the day it
+  tripped, so a post-midnight run by another member advancing the counter day
+  can never strand a frozen member. The meter persists in `runtime.json` — a
+  restart neither resets the day's spend nor forgets who the breaker froze.
 - **Alarm tool family — one-shot absolute-time self-wake.** New
   `pkg/tools/alarm` package: a non-blocking, durable `Scheduler` plus the
   `alarm_create` / `alarm_list` / `alarm_cancel` tools. Unlike `schedule_wakeup`

@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"io/fs"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +21,13 @@ import (
 type Backend interface {
 	// Token is the session token every /api and /ws request must present.
 	Token() string
+
+	// AllowRemote reports whether the host was started with the non-loopback
+	// opt-in (RP-15). When true the loopback-trust conveniences are off: the
+	// router hides the GET /api/auth/bootstrap endpoint entirely (behind a
+	// reverse proxy every caller LOOKS loopback, so the endpoint would leak
+	// the token to the world).
+	AllowRemote() bool
 
 	// HasSpace reports whether a space id is registered (the WS subscribe guard).
 	HasSpace(spaceID string) bool
@@ -98,10 +106,12 @@ type Backend interface {
 	// IngestEvent delivers an external webhook event (RP-9) onto a member's
 	// mailbox (default the leader), waking it through the ordinary bus path — a
 	// webhook is just a message. duplicate is true when the idempotency key was
-	// already seen (no second delivery/wake). Errors carry "unknown space" /
-	// "stopped" so the handler can map 404 / 409. This rides an UNAUTHENTICATED
-	// route (loopback-only trust boundary — see NewRouter).
-	IngestEvent(ref string, evt EventIn) (messageID string, duplicate bool, err error)
+	// already seen (no second delivery/wake). Errors carry "unauthorized" /
+	// "unknown space" / "stopped" so the handler can map 401 / 404 / 409. The
+	// route skips the session-token guard; instead the backend authorizes from
+	// auth (RP-15): a space-configured webhook_secret must match for everyone,
+	// and without one only loopback peers pass (the RP-9 trust boundary).
+	IngestEvent(ref string, evt EventIn, auth EventAuth) (messageID string, duplicate bool, err error)
 
 	// Agent skills (RP-10). MemberSkills lists a member's authored skills (bool false
 	// when the space/member is unknown); AddSkill writes a new SKILL.md and hot-reloads
@@ -112,6 +122,16 @@ type Backend interface {
 	MemberSkills(spaceID, agent string) ([]SkillInfo, bool)
 	AddSkill(spaceID, agent string, spec SkillSpec) error
 	DeleteSkill(spaceID, agent, skill string) error
+
+	// Vacuum runs one ledger retention pass now (RP-16): archive-then-delete
+	// messages read ≥ days ago and tasks completed ≥ days ago. days <= 0 uses
+	// the space's configured window (or the default); dryRun only counts.
+	Vacuum(ref string, days int, dryRun bool) (VacuumStats, error)
+
+	// Metrics snapshots a space's scheduler counters (RP-17): per-member
+	// wakes/runs/aborts + run-duration buckets, bus hint drops, and the event
+	// log's logged/dropped counts. false = unknown or stopped space.
+	Metrics(spaceID string) (MetricsInfo, bool)
 }
 
 // SpaceInfo is one row of GET /api/swarms. Status is "running" | "stopped"
@@ -149,6 +169,15 @@ type MemberInfo struct {
 	// unknown window) and the TS contract expects both fields always present.
 	ContextTokens int `json:"contextTokens"`
 	ContextLimit  int `json:"contextLimit"`
+	// Token meter (RP-13): cumulative session input/output tokens as of the
+	// member's last run boundary, today's spend, and the member's effective
+	// daily budget (0 = unlimited). TokensToday vs TokensBudget is the budget
+	// breaker's gauge; a frozen membership plus an exhausted gauge reads as
+	// "frozen by the breaker".
+	TokensIn     int `json:"tokensIn,omitempty"`
+	TokensOut    int `json:"tokensOut,omitempty"`
+	TokensToday  int `json:"tokensToday,omitempty"`
+	TokensBudget int `json:"tokensBudget,omitempty"`
 	// Cron / SchedulePrompt expose the member's recurring timer (RP-7/RP-8), read
 	// live from the space's schedule map (the schedule's owner — it is NOT on
 	// MemberView). Empty when the member has no schedule.
@@ -222,9 +251,52 @@ type EventIn struct {
 	IdempotencyKey string          `json:"idempotency_key"`
 }
 
-// maxEventBytes bounds a webhook request body — the endpoint is unauthenticated
-// (loopback-only, RP-9), so cap the read defensively.
+// maxEventBytes bounds a webhook request body — the endpoint skips the session
+// token (RP-9 loopback trust / RP-15 webhook secret), so cap the read defensively.
 const maxEventBytes = 64 << 10
+
+// WebhookSecretHeader carries a space's shared webhook secret on event POSTs
+// (RP-15). Only consulted for spaces that set settings.webhook_secret.
+const WebhookSecretHeader = "X-Evva-Webhook-Secret"
+
+// EventAuth is what the transport observed about an event POST's caller: the
+// presented shared secret (may be empty) and whether the TCP peer was a
+// loopback address. The router only reports; the backend decides (RP-15).
+type EventAuth struct {
+	Secret   string
+	Loopback bool
+}
+
+// VacuumStats is the result of POST /api/swarm/{id}/vacuum (RP-16): how many
+// rows one retention pass archived + deleted (or, on a dry run, would have),
+// the archive files appended, and the effective window used.
+type VacuumStats struct {
+	Messages int      `json:"messages"`
+	Tasks    int      `json:"tasks"`
+	Files    []string `json:"files,omitempty"`
+	Days     int      `json:"days"`
+	DryRun   bool     `json:"dryRun"`
+}
+
+// MetricsInfo is GET /api/swarm/{id}/metrics (RP-17): plain counters, no
+// timeseries — the user-side exporter (if any) owns history.
+type MetricsInfo struct {
+	UptimeSecs    int64                        `json:"uptimeSecs"`
+	EventsLogged  int64                        `json:"eventsLogged"`
+	EventsDropped int64                        `json:"eventsDropped"`
+	HintsDropped  int64                        `json:"hintsDropped"`
+	Members       map[string]MemberMetricsInfo `json:"members"`
+}
+
+// MemberMetricsInfo is one member's scheduler counters. RunSeconds buckets
+// completed runs by wall-clock duration: lt10s / lt1m / lt10m / gte10m.
+type MemberMetricsInfo struct {
+	WakesMessage int64            `json:"wakesMessage"`
+	WakesTimer   int64            `json:"wakesTimer"`
+	Runs         int64            `json:"runs"`
+	Aborts       int64            `json:"aborts"`
+	RunSeconds   map[string]int64 `json:"runSeconds"`
+}
 
 // MessageInfo mirrors store.Message on the wire (GET /api/messages).
 type MessageInfo struct {
@@ -266,6 +338,21 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 	})
 
 	guard := tokenGuard(b)
+
+	// Session bootstrap (RP-15): hands the minted token to LOCAL callers so the
+	// embedded FE logs in without the operator copying anything — the same
+	// loopback trust the whole service relied on pre-RP-15, now scoped to this
+	// one endpoint. Two hard gates: it vanishes entirely in --allow-remote mode
+	// (behind a reverse proxy every caller's TCP peer IS loopback, so it would
+	// otherwise hand the token to the world), and the peer must be loopback.
+	// 404 — not 401 — when gated, so its existence isn't advertised.
+	mux.HandleFunc("GET /api/auth/bootstrap", func(w http.ResponseWriter, r *http.Request) {
+		if b.AllowRemote() || !peerIsLoopback(r.RemoteAddr) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"token": b.Token()})
+	})
 
 	// Read snapshots.
 	mux.Handle("GET /api/swarms", guard(func(w http.ResponseWriter, r *http.Request) {
@@ -314,21 +401,26 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"id": id})
 	}))
-	// External-event webhook (RP-9). DELIBERATELY un-guarded (HandleFunc, not
-	// guard): an external app drops a signal here without the root token — the
-	// trust boundary is the loopback bind, not a token (RP-9; §6 future = a
-	// per-space narrow webhook token). The body is size-capped since it's
-	// unauthenticated. new → 202, duplicate idempotency_key → 200, missing body →
-	// 400, unknown space → 404, stopped → 409.
+	// External-event webhook (RP-9/RP-15). DELIBERATELY outside the session-token
+	// guard (HandleFunc, not guard): an external app should never hold the
+	// operator token. Instead the backend authorizes per space: a configured
+	// settings.webhook_secret (header X-Evva-Webhook-Secret) must match for
+	// every caller; without one, loopback peers keep the RP-9 trust and remote
+	// peers are refused. The body is size-capped since the route is reachable
+	// pre-auth. new → 202, duplicate idempotency_key → 200, bad secret → 401,
+	// missing body → 400, unknown space → 404, stopped → 409.
 	mux.HandleFunc("POST /api/swarm/{id}/event", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxEventBytes)
 		var evt EventIn
 		if !decode(w, r, &evt) {
 			return
 		}
-		id, dup, err := b.IngestEvent(r.PathValue("id"), evt)
+		auth := EventAuth{Secret: r.Header.Get(WebhookSecretHeader), Loopback: peerIsLoopback(r.RemoteAddr)}
+		id, dup, err := b.IngestEvent(r.PathValue("id"), evt, auth)
 		if err != nil {
 			switch {
+			case strings.Contains(err.Error(), "unauthorized"):
+				http.Error(w, err.Error(), http.StatusUnauthorized)
 			case strings.Contains(err.Error(), "unknown space"):
 				http.Error(w, err.Error(), http.StatusNotFound)
 			case strings.Contains(err.Error(), "stopped"):
@@ -389,6 +481,14 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 	mux.Handle("GET /api/swarm/{id}/pending", guard(func(w http.ResponseWriter, r *http.Request) {
 		if gates, ok := b.PendingGates(r.PathValue("id")); ok {
 			writeJSON(w, http.StatusOK, gates)
+		} else {
+			http.Error(w, "unknown space", http.StatusNotFound)
+		}
+	}))
+	// Scheduler counters (RP-17).
+	mux.Handle("GET /api/swarm/{id}/metrics", guard(func(w http.ResponseWriter, r *http.Request) {
+		if m, ok := b.Metrics(r.PathValue("id")); ok {
+			writeJSON(w, http.StatusOK, m)
 		} else {
 			http.Error(w, "unknown space", http.StatusNotFound)
 		}
@@ -484,6 +584,23 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 	mux.Handle("POST /api/halt", guard(func(w http.ResponseWriter, r *http.Request) {
 		respondErr(w, b.HaltAll(r.URL.Query().Get("space")))
 	}))
+	// Ledger retention pass (RP-16). The body is optional — an empty POST runs
+	// the space's configured window for real; {days, dry_run} override.
+	mux.Handle("POST /api/swarm/{id}/vacuum", guard(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Days   int  `json:"days"`
+			DryRun bool `json:"dry_run"`
+		}
+		if r.ContentLength != 0 && !decode(w, r, &body) {
+			return
+		}
+		stats, err := b.Vacuum(r.PathValue("id"), body.Days, body.DryRun)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
+	}))
 
 	// WebSocket bridge — guarded by the same token (browsers pass it as ?token=).
 	mux.Handle("GET /ws", guard(websocket.Handler(func(ws *websocket.Conn) {
@@ -523,6 +640,20 @@ func tokenGuard(b Backend) func(http.HandlerFunc) http.Handler {
 			next(w, r)
 		})
 	}
+}
+
+// peerIsLoopback reports whether a request's TCP peer is a loopback address.
+// RemoteAddr is kernel-reported (never a header), so a remote caller cannot
+// spoof it; behind a reverse proxy it is the PROXY's address — which is exactly
+// why remote-facing deployments must run --allow-remote (killing the loopback
+// trust paths) rather than proxying a default loopback-trusting instance.
+func peerIsLoopback(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // bearer extracts the presented token from the Authorization header or the

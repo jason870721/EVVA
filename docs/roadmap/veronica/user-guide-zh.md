@@ -151,6 +151,14 @@ workers:
 settings:
   permission_mode: default  # default | accept_edits | plan | bypass
   max_iterations: 50        # 每个成员单次运行的循环上限
+  # —— 运营保险丝（按需启用，详见 §8）——
+  # daily_budget_tokens: 2000000  # 每成员每日 token 上限（in+out）；0/省略 = 不限
+  # budget_stay_frozen: false     # true = 超额冻结跨日不自动解冻（需手动）
+  # stall_threshold: 10m          # 成员忙超过即告警；"0" 关闭（省略 = 默认 10m）
+  # stall_hard_timeout: 30m       # 忙超过即自动取消该次运行；0/省略 = 关闭
+  # webhook_secret: "hunter2"     # 要求事件 POST 携带 X-Evva-Webhook-Secret（见 §10）
+  # retention_days: 30            # 已消费历史 N 天后归档+删除；"0" = 永不删除
+  # event_log: true               # 事件镜像到 .vero/events/（按日 jsonl）；false = 关闭
 ```
 
 - 同一 space 内**成员名唯一**（不支持副本 —— 每个成员取不同名字）。
@@ -221,8 +229,10 @@ effort: medium
 when_to_use: "后端：API、数据库 schema、迁移、服务端测试。"
 # 选填：按定时器唤醒做自检（cron 与 every 二选一）：
 # schedule:
-#   cron: "*/5 * * * *"     # 每 5 分钟
+#   cron: "*/5 * * * *"     # 每 5 分钟（cron 按系统本地时区比对）
 #   # every: "30s"          # 或固定间隔
+# 选填：个别 token 预算覆写（见 §8）：>0 自有上限、-1 完全豁免、省略 = 继承 settings
+# budget_tokens: 250000
 ```
 
 `agents/sub/backend-dev/tools/active.yml` —— 程序员真正需要的干活工具
@@ -340,6 +350,112 @@ evva service stop
 - **暂停 / 恢复** —— 立刻中止成员正在飞的运行，之后再恢复（它的未读工作会被重新处理）。
 - **全部停止（Halt all）** —— 紧急制动：取消该 space 里所有在飞的运行。
 
+### 成本与卡死保险丝（token 预算 / stall 看门狗）
+
+7×24 跑的团队需要两根保险丝。都在 `evva-swarm.yml` 的 `settings:` 里、按 space 生效；
+不设就完全不介入。
+
+**每日 token 预算（budget breaker）**
+
+```yaml
+settings:
+  daily_budget_tokens: 2000000   # 每成员每天（本地日界线）in+out token 上限；0 = 不限
+  budget_stay_frozen: false      # true = 跨日不自动解冻，须手动
+workers:
+  - agent: watchdog
+    budget_tokens: -1            # 个别覆写：>0 自有上限；-1 完全豁免；省略 = 继承
+```
+
+- 成员在一次运行结束后越线 → **自动冻结**，leader 与你（Web 收件箱 / Timeline）各收到一封
+  `⚠️ budget breaker` 通知。
+- 它的邮箱照常排队、什么都不丢；**本地日界线一过自动解冻**（除非 `budget_stay_frozen`）。
+- 在花名册手动解冻视为操作员覆写：若当日额度仍超标，它跑完下一轮会**再次熔断（只再通知
+  一次）** —— 真要放行请调高预算。
+- 用量随时看得到：leader 跑 `list_members` 每行带 `tok in 1.2M out 345k, today 89k/500k`；
+  Web 花名册 API 带 `tokensIn / tokensOut / tokensToday / tokensBudget`。计数与熔断状态
+  会持久化 —— **重启服务不会清零当天额度**。
+
+**Stall 看门狗（卡死告警 / 自动止损）**
+
+```yaml
+settings:
+  stall_threshold: 10m      # 忙超过此时长且不是在等人 → 告警；"0" 关闭（省略 = 默认 10m）
+  stall_hard_timeout: 0     # 忙超过此时长 → 自动取消该次运行；0/省略 = 关闭（建议先观察再开）
+```
+
+- 成员**忙**超过 `stall_threshold`（卡死的 LLM 调用、挂住的工具、或确实很长的任务），
+  你和 leader 各收到一封 `⏳ stall` 通知 —— **每次运行最多一封**，不刷屏。
+- 正在**等人**的不算卡死：waiting-approval / waiting-input / paused 阶段一律豁免。
+- 开了 `stall_hard_timeout`，超时的运行会被取消：它认领中的邮件自动退回未读、下次唤醒
+  重试 —— **不丢工作**；同一件事再挂住会再告警/再取消。
+- leader 自己卡死时，至少你会收到通知。
+
+**时间与时区（v1.4.5-beta.2 起）**
+
+- 注入给成员的所有时间（`currenttime`、事件戳、信件 `[sent …]`、alarm 回执）一律带明确
+  UTC 偏移，如 `2026-06-10 20:25:00 +08:00`。
+- `alarm_set` 等处的裸时间字符串按**系统本地时区**解析；要表达 UTC 用 RFC3339
+  （`2026-06-10T12:25:00Z`），确认回执会同时给出 UTC 对照，下错时区一眼可见。
+- cron（manifest 的 `schedule` 与 leader 的 `schedule_set`）按系统本地墙钟比对。
+
+### Ledger 瘦身（`retention_days` / `evva swarm vacuum`）
+
+24/7 跑的 swarm 会无限累积 messages 和已完成任务，Web/API 的读取随表变大而变慢。
+Retention 在**不丢历史**的前提下控制工作集：符合条件的行先追加到
+`<workdir>/.vero/archive/YYYY-MM.jsonl.gz`（按行自己的月份分桶），再删除并压缩
+数据库。
+
+只有这些行会被清（其余永不动）：
+
+- 已**读**、且读取发生在 ≥ `retention_days` 天前的 messages；
+- 进入终态 **completed** 且 ≥ `retention_days` 天的任务——但若仍被存活的行引用
+ （某条留存消息的 `ref_task`、某个子任务的 parent 链），则继续保留。
+
+未读信、claimed（折叠中）的信、以及 pending/running/suspended/verifying 状态的
+任务无论多老都碰不得。
+
+只要 `settings.retention_days` > 0（默认 **30**；写 `"0"` 保持旧的永不删除行为），
+service 每个本地日自动跑一次（service 启动时也补跑一次，弥补睡过午夜的机器）。
+手动跑、先预览：
+
+```bash
+evva swarm vacuum my-eng-team --dry-run     # 只报数字，什么都不动
+evva swarm vacuum my-eng-team               # 按配置窗口归档+删除
+evva swarm vacuum my-eng-team --days 7      # 本次临时覆盖窗口
+```
+
+之后要查归档：它就是 gzip 的 JSON-lines ——
+`zcat .vero/archive/2026-06.jsonl.gz | jq .`（每行带 `kind` message/task 和完整
+原始行）。量级参考：积压 10 万条 messages 时 API 单次 ~300 ms，vacuum 后回到
+亚毫秒，清理本身约 1.2 秒。
+
+### 飞行记录器与 metrics（event log / `/metrics`）
+
+Web 界面看到的每一个事件（run/turn 生命周期、工具调用与结果、审批、错误——除了
+token 级的流式 chunk）都会同时追加到 `<workdir>/.vero/events/YYYY-MM-DD.jsonl`，
+每行一条带时间戳的 JSON。「昨晚 03:00 发生了什么」从此一句 grep 就能回答，重启
+也不丢：
+
+```bash
+grep '03:0' .vero/events/2026-06-09.jsonl | jq '.event.event.Kind' | sort | uniq -c
+```
+
+文件按日切；旧文件按同一个 `retention_days` 窗口清理（`"0"` = 永久保留）。
+`event_log: false` 关闭记录器。记录器永远不会拖慢 swarm：缓冲满了就丢行并计数
+（`eventsDropped`），绝不阻塞事件泵。
+
+实时计数器（按成员，自 space 启动起累计）：
+
+```bash
+curl -s -H "Authorization: Bearer $(cat ~/.evva/service/token)" \
+  http://127.0.0.1:8888/api/swarm/<ref>/metrics | jq .
+```
+
+返回 `uptimeSecs`、`eventsLogged` / `eventsDropped`（记录器）、`hintsDropped`
+（信箱背压——持续上涨说明某成员长期积压）、以及每成员的 `wakesMessage` /
+`wakesTimer` / `runs` / `aborts` 和运行时长直方图（`runSeconds`：lt10s / lt1m /
+lt10m / gte10m）。纯 JSON——要历史曲线就自己接 exporter。
+
 ### 重启与续跑
 
 swarm 是崩溃安全的。在 `evva service stop`（或崩溃）后重新 `evva service start`：
@@ -373,10 +489,55 @@ evva swarm ls            # 两个都列出，完全隔离
 
 - service 默认**只绑定 `127.0.0.1`** —— 外部机器无法访问。（agent 会跑 shell、改
   文件，所以这个工作站等同于远程代码执行；务必留在 loopback 上。）
-- 每个 Web/API 请求都需要**会话 token**（启动时打印，存于
-  `~/.evva/service/token`）。浏览器会让你粘贴一次。
+- 每个 Web/API 请求都需要**会话 token**。自 v1.5 起它是每次 `evva service start`
+  随机铸造的密钥（固定的开发 token `root` 已移除），存于 `~/.evva/service/token`
+ （权限 0600）。正常情况下你根本见不到它：同一台机器上的浏览器会自动登录
+ （一个仅限 loopback 的 bootstrap 端点把 token 交给页面），CLI 直接读文件。
+  轮换 = 重启。
 - 在 `permission_mode: default` 下，写/ shell 类工具会走审批弹窗 —— 你始终在环路里。
   仅在你信任任务和工作目录时才用 `bypass`。
+
+### 把工作站暴露到本机之外（`--allow-remote`）
+
+默认情况下，非 loopback 绑定**直接拒绝启动**。要从其他设备（局域网、或经反向
+代理）访问工作站，必须显式开启：
+
+```bash
+evva service start --addr 0.0.0.0:8888 --allow-remote
+```
+
+先想清楚威胁模型：**谁拿到会话 token，谁就是 operator** —— 可以批准工具调用、给
+成员发消息，等同于在这台机器上执行 shell。远程模式下，loopback 的便利全部关闭：
+
+- FE 自动登录的 bootstrap 端点消失（经代理后所有请求看起来都来自本机）。每台
+  设备、每次 service 重启后，从 `~/.evva/service/token` 粘贴一次 token。
+- 其他主机发来的 webhook POST 一律拒绝，除非目标 space 配置了
+  `settings.webhook_secret`（见下）。
+
+TLS 终结和 IP 过滤交给你的反向代理 —— service 本身保持纯 HTTP、单 operator
+（没有账号体系，没有 RBAC）。
+
+### 外部事件 webhook 与 `webhook_secret`
+
+外部应用可以 POST 一个事件来唤醒某个成员（默认 leader），不需要会话 token：
+
+```bash
+curl -X POST http://127.0.0.1:8888/api/swarm/<space-id>/event \
+  -H 'Content-Type: application/json' \
+  -H 'X-Evva-Webhook-Secret: hunter2' \
+  -d '{"title":"BTC spike","body":"vol>3sigma","source":"trader-engine",
+       "idempotency_key":"evt-123"}'
+```
+
+鉴权规则（RP-15）：
+
+| space 配置 | 本机调用 | 远程调用 |
+| --- | --- | --- |
+| 未设 `webhook_secret` | 放行（沿用 loopback 信任） | **401** |
+| 设了 `webhook_secret` | 必须带对的 header | 必须带对的 header |
+
+返回码：新事件 → 202，重复 `idempotency_key` → 200，secret 缺失/错误 → 401，
+未知 space → 404，已停止 → 409。请求体上限 64 KB。
 
 ---
 
@@ -386,13 +547,14 @@ evva swarm ls            # 两个都列出，完全隔离
 
 | 命令 | 作用 |
 | --- | --- |
-| `evva service start` | 以后台守护进程启动 `:8888` 宿主（打印 token）。 |
+| `evva service start` | 以后台守护进程启动 `:8888` 宿主（铸造并保存 token）。旗标：`--addr <host:port>`、`--allow-remote`（任何非 loopback 地址都必须带它）。 |
 | `evva service status` | 报告运行/停止、pid、地址、token 位置。 |
 | `evva service stop` | 停止守护进程（space 会被保留，下次启动续跑）。 |
 | `evva swarm .` | 把当前目录的 `evva-swarm.yml` 注册为一个新 space。 |
 | `evva swarm ls` | 列出已注册的 space。 |
 | `evva swarm stop <id>` | 停止（并移除）一个 space。 |
 | `evva swarm add <id> <成员>` | 向 space 热加载一个 worker（`agents/sub/<成员>/`）。 |
+| `evva swarm vacuum <ref> [--days N] [--dry-run]` | 归档后删除已消费历史（RP-16）；dry-run 先预览。 |
 
 ### 环境变量
 
@@ -400,6 +562,7 @@ evva swarm ls            # 两个都列出，完全隔离
 | --- | --- |
 | `EVVA_SERVICE_ADDR` | 覆盖监听/目标地址（默认 `127.0.0.1:8888`）。 |
 | `EVVA_SERVICE_HOME` | 覆盖运行时目录（默认 `<AppHome>/service/`：pidfile、token、addr、log）。 |
+| `EVVA_SERVICE_ALLOW_REMOTE` | `1` = 允许非 loopback 绑定（`--allow-remote` 传给守护子进程的形式）。 |
 
 ### 运行时文件（`~/.evva/service/`）
 
