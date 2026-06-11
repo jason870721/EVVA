@@ -130,6 +130,7 @@ my-team/
         ├── backend-dev/
         │   ├── system_prompt.md
         │   ├── profile.yml
+        │   ├── memory/            # auto-created: the member's long-term memory (typed *.md + MEMORY.md index)
         │   └── tools/active.yml
         └── frontend-dev/
             ├── system_prompt.md
@@ -394,6 +395,21 @@ pick up their tasks, report back, and the board march to **completed**.
 - **Timer wake.** A member with a `schedule` in its `profile.yml` is Run on that
   cadence (a heartbeat / self-check). Members with no wake source sit idle and
   **burn no tokens**.
+- **Member long-term memory.** Every member gets `agents/{main,sub}/<name>/memory/`
+  at construction — plain files that ride the same git/.gitignore decision as
+  agents/ and survive restarts for free. Members with a file-write tool
+  (write/edit) are auto-taught the **memory discipline protocol**: one fact per
+  file (with `name:` / `description:` / `type:` frontmatter), absolute dates,
+  update before finishing a session, prune what went stale, and keep a one-line-
+  per-memory `MEMORY.md` index. **The index rides each wake message** (the same
+  system-reminder as currenttime) and never enters the static prompt — so a
+  weeks-long member keeps a byte-stable prompt prefix (memory growth can't bust
+  the prompt cache), and a member that never saved anything wakes with zero
+  noise. Governance is **write-own / read-all**: writes to your own memory dir
+  auto-allow, writes to a teammate's are rejected (even on bypass), reads are
+  open — the team's mind is transparent to teammates and the operator alike
+  (read-only `GET /api/agents/<name>/memory?space=<id>`; the web Memory tab
+  lands with the FE batch).
 - **Idle = cheap.** Nothing runs until there's a reason (a message, a task, a
   timer). An idle swarm costs nothing.
 

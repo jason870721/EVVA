@@ -23,10 +23,13 @@ import (
 
 // injectTeamProtocol returns the member's effective system prompt: its authored
 // persona, then its swarm grounding (space/name/role), then the role's
-// collaboration protocol. The persona leads (it is the agent's identity); the
-// grounding and protocol are appended as standard operational sections. A blank
-// persona still yields a usable prompt (grounding + protocol only).
-func injectTeamProtocol(persona, name, space string, role agentdef.Role) string {
+// collaboration protocol, then — for members that carry a file-write tool —
+// the long-term memory protocol (RP-25). The persona leads (it is the agent's
+// identity); the grounding and protocol are appended as standard operational
+// sections. A blank persona still yields a usable prompt (grounding + protocol
+// only). canWriteMemory gates the memory section: a member with no write/edit
+// tool cannot maintain memory files, so teaching it the protocol is noise.
+func injectTeamProtocol(persona, name, space string, role agentdef.Role, canWriteMemory bool) string {
 	var b strings.Builder
 	if p := strings.TrimRight(persona, "\n"); p != "" {
 		b.WriteString(p)
@@ -41,7 +44,37 @@ func injectTeamProtocol(persona, name, space string, role agentdef.Role) string 
 	} else {
 		b.WriteString(workerProtocol)
 	}
+	if canWriteMemory {
+		b.WriteString("\n\n")
+		b.WriteString(memoryProtocol(name, role))
+	}
 	return b.String()
+}
+
+// memoryProtocol teaches a member its long-term memory discipline (RP-25): the
+// on-disk home, the save format (the solo typed-memdir conventions), the wake
+// index contract, and the write-own/read-all governance. Parametrized only by
+// the member's FIXED coordinates (name, role tier) so the section — like all
+// swarm prompt sections — is byte-stable across rebuilds (RP-5). This section
+// is the framework collecting what Sunday hand-wrote into 8 personas.
+func memoryProtocol(name string, role agentdef.Role) string {
+	tier := "sub"
+	if role == agentdef.RoleLeader {
+		tier = "main"
+	}
+	dir := "agents/" + tier + "/" + name + "/memory"
+	return "## Your long-term memory\n\n" +
+		"You have a persistent memory directory at `" + dir + "/` (relative to your working directory). " +
+		"It survives restarts and context compaction — your transcript does not, so anything worth keeping across sessions belongs there. " +
+		"The directory already exists; write files into it with your ordinary file tools (writes there are auto-allowed).\n\n" +
+		"- **Wake-up index:** when your `" + dir + "/MEMORY.md` index exists, every wake message carries it. " +
+		"It is a table of contents, not the memories themselves — read the linked file before relying on one, and verify time-sensitive facts against current state before acting on them.\n" +
+		"- **Saving is two steps:** write one fact per file with frontmatter (`name:`, `description:`, `type: user|feedback|project|reference`), " +
+		"then add one line to `MEMORY.md`: `- [Title](file.md) — one-line hook`. Keep the index lean (one line per memory, ~200 lines max); never write memory content into the index itself.\n" +
+		"- **Date everything absolutely** (\"2026-06-11\", never \"yesterday\" or \"last week\") — your next wake may be days away, and relative dates rot.\n" +
+		"- **Before finishing a work session,** persist what your next wake will need: decisions made, open leads, durable facts about the systems you touched. Update or delete memories that turned out wrong — pruning is part of the duty.\n" +
+		"- **Teammates' memories are readable, never writable:** you may read `agents/{main,sub}/<member>/memory/` to see a teammate's notes, but writes outside your own memory directory are rejected.\n" +
+		"- **What does NOT belong there:** anything re-derivable from the code/ledger (task status, file contents), or ephemeral in-run state. Memory is for what the NEXT session cannot reconstruct."
 }
 
 // swarmIdentity grounds a member in its concrete, time-invariant coordinates:

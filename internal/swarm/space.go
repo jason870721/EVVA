@@ -3,7 +3,11 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -197,7 +201,11 @@ func (sp *SwarmSpace) registerDef(ld agentdef.Loaded) {
 	// operator never has to hand-write the mechanics (see teamprompt.go). Pairs
 	// with the role-based tool injection (ToolSet) — both keyed off ld.Role. The
 	// member's space/name/role grounding is prepended to the protocol here too.
-	def.SystemPrompt = injectTeamProtocol(def.SystemPrompt, def.Name, sp.Name, ld.Role)
+	// The memory protocol (RP-25) rides along for members that can actually
+	// maintain memory files — i.e. carry a file-write tool.
+	canWriteMemory := slices.Contains(def.ActiveTools, tools.WRITE_FILE) ||
+		slices.Contains(def.ActiveTools, tools.EDIT_FILE)
+	def.SystemPrompt = injectTeamProtocol(def.SystemPrompt, def.Name, sp.Name, ld.Role, canWriteMemory)
 	sp.mu.Lock()
 	sp.reg.Register(def)
 	sp.mu.Unlock()
@@ -250,6 +258,22 @@ func (sp *SwarmSpace) constructMember(ld agentdef.Loaded) error {
 		permMode = pm
 	}
 
+	// Member-native long-term memory (RP-25): home this member's writable
+	// memory at its own <agentDir>/memory/ — created here so first boot AND
+	// hot-add both leave an empty dir ready for the model's first write. The
+	// global auto-memory toggles are forced OFF on the clone: the solo prompt
+	// sections would advertise <appHome>/memory (the wrong store), and the
+	// per-turn recall side-query is redundant cost for a swarm member — the
+	// wake-injected index + read-on-demand is the member protocol. The
+	// WithMemoryDir override (below) keeps the write carve-out targeting the
+	// member dir independent of those toggles.
+	memDir := agentdef.MemoryDir(sp.Workdir, ld.Role, name)
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		return fmt.Errorf("swarm: member %q: create memory dir: %w", name, err)
+	}
+	acfg.EnableAutoMemory = false
+	acfg.EnableMemoryRecall = false
+
 	// Bind this member's runtime identity onto its own config so the swarm
 	// custom tools (SPRD-1-7) can read who they belong to at build time — a
 	// shared WithCustomTool factory can't carry it in a closure.
@@ -267,6 +291,7 @@ func (sp *SwarmSpace) constructMember(ld agentdef.Loaded) error {
 		agent.WithSink(sink),
 		agent.WithSkillRegistry(ld.Skills),
 		agent.WithName(name),
+		agent.WithMemoryDir(memDir),
 		agent.WithRootContext(sp.ctx),
 		// Stream tokens live to the web console. Every swarm member is a root
 		// persona whose run is watched in the :8888 UI, so the streaming UX win
@@ -511,6 +536,91 @@ func (sp *SwarmSpace) MemberSkills(member string) ([]agent.Skill, error) {
 	for _, m := range list {
 		out = append(out, agent.Skill{Name: m.Name, Description: m.Description})
 	}
+	return out, nil
+}
+
+// memoryWakeReminderCap bounds the index text injected per wake. The solo
+// convention caps the index at ~200 lines; 16 KiB is far above any healthy
+// index and merely stops a runaway file from flooding a wake prompt.
+const memoryWakeReminderCap = 16 * 1024
+
+// memoryWakeReminder renders the block the scheduler hangs inside a member's
+// wake <system-reminder> (RP-25): the member's own MEMORY.md index, labeled
+// with its on-disk path so the model knows where the linked files live. ""
+// when the member has no index yet (or it is empty/unreadable) — a member
+// that never saved a memory gets zero wake noise. Read fresh per wake: the
+// index is the member's own latest write, never cached.
+func (sp *SwarmSpace) memoryWakeReminder(name string) string {
+	role, ok := sp.Roster.roleOf(name)
+	if !ok {
+		return ""
+	}
+	dir := agentdef.MemoryDir(sp.Workdir, role, name)
+	b, err := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
+	if err != nil {
+		return ""
+	}
+	idx := strings.TrimSpace(string(b))
+	if idx == "" {
+		return ""
+	}
+	if len(idx) > memoryWakeReminderCap {
+		idx = idx[:memoryWakeReminderCap] + "\n… (index truncated — prune it)"
+	}
+	rel, err := filepath.Rel(sp.Workdir, dir)
+	if err != nil {
+		rel = dir
+	}
+	return "Your memory index (" + filepath.ToSlash(rel) + "/MEMORY.md — read a linked file before relying on it):\n" + idx
+}
+
+// MemoryFile is one file of a member's memory dir, served read-only to the
+// web (RP-25): the User's transparency window onto the team's mind.
+type MemoryFile struct {
+	Name    string // dir-relative path, slash-separated (e.g. "MEMORY.md", "project_x.md")
+	Content string
+}
+
+// MemberMemoryFiles lists a member's memory directory for the web's read-only
+// Memory view (RP-25). Reads the disk fresh — the dir is the single source of
+// truth the member itself writes. Only *.md files surface (the memdir
+// convention); each is capped like memdir.MaxFileBytes so one runaway file
+// cannot balloon the response. An empty dir yields an empty list, not an error.
+func (sp *SwarmSpace) MemberMemoryFiles(member string) ([]MemoryFile, error) {
+	role, ok := sp.Roster.roleOf(member)
+	if !ok {
+		return nil, fmt.Errorf("swarm: unknown member %q", member)
+	}
+	dir := agentdef.MemoryDir(sp.Workdir, role, member)
+	const maxFileBytes = 64 * 1024
+	var out []MemoryFile
+	// Walk errors (missing dir, unreadable entry) skip silently: an absent or
+	// half-readable memory dir is a state to display as empty, not an error.
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil
+		}
+		if len(b) > maxFileBytes {
+			b = b[:maxFileBytes]
+		}
+		rel, rerr := filepath.Rel(dir, p)
+		if rerr != nil {
+			rel = d.Name()
+		}
+		out = append(out, MemoryFile{Name: filepath.ToSlash(rel), Content: string(b)})
+		return nil
+	})
+	// Index first, then the rest alphabetically — the order a reader wants.
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i].Name == "MEMORY.md") != (out[j].Name == "MEMORY.md") {
+			return out[i].Name == "MEMORY.md"
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }
 

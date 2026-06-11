@@ -2,6 +2,7 @@ package permission
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -44,6 +45,47 @@ func TestDecide_AskRuleDoesNotPierceBypass(t *testing.T) {
 	d := Decide(mkCall("bash", "make deploy"), ModeBypass, store, Hint{}, "", "")
 	if d.Behavior != BehaviorAllow {
 		t.Errorf("ask rule should not block bypass; got %v (%s)", d.Behavior, d.Reason)
+	}
+}
+
+// RP-25 sibling-memory fence: a swarm member (memory-homed under
+// <workdir>/agents/) may never write another member's memory dir — in ANY
+// mode, bypass included — while its own dir auto-allows and solo agents
+// (memDir under appHome) are untouched.
+func TestDecide_SiblingMemoryFence(t *testing.T) {
+	wd := t.TempDir()
+	own := filepath.Join(wd, "agents", "sub", "analyst", "memory")
+	foreign := filepath.Join(wd, "agents", "main", "lead", "memory", "notes.md")
+	writeCall := func(path string) ToolCall {
+		return ToolCall{Name: "write", Input: []byte(`{"file_path":` + strconv.Quote(path) + `}`)}
+	}
+
+	for _, mode := range []Mode{ModeDefault, ModeBypass} {
+		d := Decide(writeCall(foreign), mode, NewStore(), Hint{}, wd, own)
+		if d.Behavior != BehaviorDeny {
+			t.Errorf("%s: writing a sibling's memory should deny, got %v (%s)", mode, d.Behavior, d.Reason)
+		}
+	}
+
+	// Own memory dir: the auto-mem carve-out allows without a prompt.
+	d := Decide(writeCall(filepath.Join(own, "lead.md")), ModeDefault, NewStore(), Hint{}, wd, own)
+	if d.Behavior != BehaviorAllow {
+		t.Errorf("own memory write should auto-allow, got %v (%s)", d.Behavior, d.Reason)
+	}
+
+	// Solo agent (memDir under appHome, not the workdir): fence inert — the
+	// same foreign path just asks like any ordinary write.
+	soloMem := filepath.Join(t.TempDir(), "memory")
+	d = Decide(writeCall(foreign), ModeDefault, NewStore(), Hint{}, wd, soloMem)
+	if d.Behavior != BehaviorAsk {
+		t.Errorf("solo agent writing a member memory path should ASK (fence inert), got %v (%s)", d.Behavior, d.Reason)
+	}
+
+	// Non-memory sibling files (e.g. a persona's system_prompt.md) are not
+	// the fence's business.
+	d = Decide(writeCall(filepath.Join(wd, "agents", "main", "lead", "system_prompt.md")), ModeBypass, NewStore(), Hint{}, wd, own)
+	if d.Behavior != BehaviorAllow {
+		t.Errorf("non-memory sibling write under bypass should allow, got %v (%s)", d.Behavior, d.Reason)
 	}
 }
 

@@ -126,6 +126,11 @@ type Backend interface {
 	AddSkill(spaceID, agent string, spec SkillSpec) error
 	DeleteSkill(spaceID, agent, skill string) error
 
+	// MemberMemory lists a member's long-term memory files read-only (RP-25):
+	// the User's transparency window onto the team's mind. bool false when the
+	// space or member is unknown. Curation (delete) is deferred with the FE tab.
+	MemberMemory(spaceID, agent string) ([]MemoryFileInfo, bool)
+
 	// Vacuum runs one ledger retention pass now (RP-16): archive-then-delete
 	// messages read ≥ days ago and tasks completed ≥ days ago. days <= 0 uses
 	// the space's configured window (or the default); dryRun only counts.
@@ -218,6 +223,14 @@ type MemberSpec struct {
 type SkillInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+}
+
+// MemoryFileInfo is one file of GET /api/agents/{name}/memory (RP-25): a
+// member's memory file, dir-relative name + raw markdown content. MEMORY.md
+// (the index) is first when present.
+type MemoryFileInfo struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
 }
 
 // SkillSpec is the body of POST /api/agents/{name}/skills (RP-10): the operator
@@ -627,6 +640,17 @@ func NewRouter(b Backend, hub *Hub, spa fs.FS) http.Handler {
 			return
 		}
 		respondInputErr(w, b.AddSkill(r.URL.Query().Get("space"), r.PathValue("name"), spec))
+	}))
+	// Member memory, read-only (RP-25). The User reads any member's memory in
+	// the web — team mind transparency; writes stay with the member itself
+	// (curation/delete is deferred with the FE Memory tab).
+	mux.Handle("GET /api/agents/{name}/memory", guard(func(w http.ResponseWriter, r *http.Request) {
+		files, ok := b.MemberMemory(r.URL.Query().Get("space"), r.PathValue("name"))
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, files)
 	}))
 	mux.Handle("DELETE /api/agents/{name}/skills/{skill}", guard(func(w http.ResponseWriter, r *http.Request) {
 		respondInputErr(w, b.DeleteSkill(r.URL.Query().Get("space"), r.PathValue("name"), r.PathValue("skill")))

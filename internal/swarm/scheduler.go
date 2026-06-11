@@ -151,7 +151,7 @@ func (s *Supervisor) serve(ctx context.Context, name string, m *memberRun, reaso
 		// after fireDue poked, so "the time the duty actually runs" is the right
 		// value to hand a long-running agent whose static prompt holds no date — RP-5).
 		s.log.Debug("swarm serve: timer duty", "member", name)
-		if !s.runOnce(ctx, name, m, scheduledWakePrompt(time.Now(), dutyPrompt)) {
+		if !s.runOnce(ctx, name, m, scheduledWakePrompt(time.Now(), dutyPrompt, s.sp.memoryWakeReminder(name))) {
 			return // suspended/errored — stop here
 		}
 	}
@@ -169,7 +169,7 @@ func (s *Supervisor) serve(ctx context.Context, name string, m *memberRun, reaso
 			return // nothing unread — idle burns no tokens
 		}
 		s.log.Debug("swarm serve: member has mail", "member", name, "batch", len(batch))
-		if !s.runOnce(ctx, name, m, composeMailPrompt(time.Now(), batch)) {
+		if !s.runOnce(ctx, name, m, composeMailPrompt(time.Now(), batch, s.sp.memoryWakeReminder(name))) {
 			return // suspended/errored — runOnce already unclaimed the batch for retry
 		}
 	}
@@ -428,9 +428,11 @@ func (s *Supervisor) safeRun(ctx context.Context, name, prompt string) (out stri
 // over-delivered chan hints. Like the timer wake, it opens with a currenttime
 // reminder (offset-stamped) so a mail-woken member knows what time it is, and
 // each message carries its sent stamp so stale mail is visible as stale.
-func composeMailPrompt(now time.Time, batch []store.Message) string {
+// memIndex, when non-empty, is the member's memory index block (RP-25) — it
+// rides INSIDE the same reminder, so the model reads it as harness context.
+func composeMailPrompt(now time.Time, batch []store.Message, memIndex string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "<system-reminder>currenttime: %s</system-reminder>\n", common.Stamp(now))
+	fmt.Fprintf(&b, "<system-reminder>currenttime: %s%s</system-reminder>\n", common.Stamp(now), wakeMemoryBlock(memIndex))
 	b.WriteString("You have unread messages from your teammates. Read each one and take whatever action it asks for; use send_message to reply or report back.\n")
 	for _, msg := range batch {
 		b.WriteString("\n--- Message from ")
@@ -462,13 +464,25 @@ const scheduledDutyPrompt = "[Scheduled duty] Your recurring schedule fired. Car
 // A member's custom schedule Prompt becomes the body; an empty one falls back
 // to the generic standing-duty sentence. The whole thing is wrapped in a
 // <system-reminder> so the model reads it as harness context, not a teammate's
-// request.
-func scheduledWakePrompt(now time.Time, prompt string) string {
+// request. memIndex (RP-25) hangs the member's memory index in the same
+// reminder — wake prompts are also where MEMORY enters the conversation, for
+// exactly the bit-stable-prefix reason the date lives here.
+func scheduledWakePrompt(now time.Time, prompt, memIndex string) string {
 	body := strings.TrimSpace(prompt)
 	if body == "" {
 		body = scheduledDutyPrompt
 	}
-	return fmt.Sprintf("<system-reminder>currenttime: %s, %s</system-reminder>", common.Stamp(now), body)
+	return fmt.Sprintf("<system-reminder>currenttime: %s, %s%s</system-reminder>", common.Stamp(now), body, wakeMemoryBlock(memIndex))
+}
+
+// wakeMemoryBlock formats a member's memory index for in-reminder injection:
+// a blank line then the labeled index, or "" when the member has none — a
+// memory-less member's wake reminder is byte-identical to the pre-RP-25 form.
+func wakeMemoryBlock(memIndex string) string {
+	if memIndex == "" {
+		return ""
+	}
+	return "\n\n" + memIndex
 }
 
 // poke signals a member's non-message wake (timer or resume). Non-blocking: if a

@@ -125,6 +125,7 @@ my-team/
         ├── backend-dev/
         │   ├── system_prompt.md
         │   ├── profile.yml
+        │   ├── memory/            # 自动创建：成员的长期记忆（typed *.md + MEMORY.md 索引）
         │   └── tools/active.yml
         └── frontend-dev/
             ├── system_prompt.md
@@ -357,6 +358,16 @@ Web 界面（`:8888`）针对每个 space 提供：
     （「马上停」）能立刻送达（*drain B*）。
 - **定时唤醒。** 在 `profile.yml` 里配了 `schedule` 的成员会按该节奏被运行
   （心跳 / 自检）。没有唤醒源的成员保持空闲，**不烧 token**。
+- **成员长期记忆。** 每个成员在构建时自动获得 `agents/{main,sub}/<名字>/memory/`
+  —— 纯文件、跟着 agents/ 一起进 git 或被 .gitignore，重启天然不丢。带写文件工具
+  （write/edit）的成员会被自动注入**记忆纪律协议**：一事一档（带 `name:` /
+  `description:` / `type:` frontmatter）、绝对日期、收工前更新、过期修剪，并在
+  `MEMORY.md` 维护一行式索引。**索引挂在每次唤醒消息里**（与 currenttime 同一条
+  system-reminder），从不进静态提示词 —— 所以长跑成员的 prompt 前缀保持逐位元
+  稳定（prompt cache 不被记忆变动打爆）；没存过记忆的成员唤醒零噪音。治理是
+  **写己读众**：写自己的 memory dir 免审批，写队友的一律被拒（bypass 档位也拦），
+  读队友的随意 —— 团队心智对彼此与 operator 都透明（Web 端 `GET
+  /api/agents/<名字>/memory?space=<id>` 唯读可看；Memory 分页随 FE 批次落地）。
 - **空闲即省钱。** 没有理由（消息、任务、定时器）就什么都不跑。一个空闲的 swarm
   不产生任何花费。
 

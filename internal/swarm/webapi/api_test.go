@@ -203,6 +203,16 @@ func (f *fakeBackend) MemberSkills(space, agent string) ([]SkillInfo, bool) {
 	}
 	return []SkillInfo{{Name: "demo", Description: "a demo skill"}}, true
 }
+
+func (f *fakeBackend) MemberMemory(space, agent string) ([]MemoryFileInfo, bool) {
+	if !f.HasSpace(space) || agent == "ghost" {
+		return nil, false
+	}
+	return []MemoryFileInfo{
+		{Name: "MEMORY.md", Content: "- [Lead](lead.md) — open lead"},
+		{Name: "lead.md", Content: "---\nname: lead\n---\n\nThe lead."},
+	}, true
+}
 func (f *fakeBackend) AddSkill(space, agent string, spec SkillSpec) error {
 	if !f.HasSpace(space) {
 		return errUnknownSpace
@@ -920,4 +930,36 @@ func recvWSMaybe(ws *websocket.Conn, d time.Duration) string {
 		return ""
 	}
 	return msg
+}
+
+// RP-25 route: member memory, read-only — list (GET) with the 404 mapping and
+// the auth guard; the index file leads the response.
+func TestRESTMemoryRoute(t *testing.T) {
+	fake := newFake()
+	srv := httptest.NewServer(NewRouter(fake, NewHub(), nil))
+	defer srv.Close()
+
+	var files []MemoryFileInfo
+	getJSON(t, srv.URL+"/api/agents/leader/memory?space=sp-a&token=secret", &files)
+	if len(files) != 2 || files[0].Name != "MEMORY.md" || files[1].Name != "lead.md" {
+		t.Fatalf("memory files = %+v", files)
+	}
+
+	codeOf := func(url string) int {
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if s := codeOf(srv.URL + "/api/agents/leader/memory?space=ghost&token=secret"); s != http.StatusNotFound {
+		t.Fatalf("unknown space = %d, want 404", s)
+	}
+	if s := codeOf(srv.URL + "/api/agents/ghost/memory?space=sp-a&token=secret"); s != http.StatusNotFound {
+		t.Fatalf("unknown member = %d, want 404", s)
+	}
+	if s := codeOf(srv.URL + "/api/agents/leader/memory?space=sp-a"); s != http.StatusUnauthorized {
+		t.Fatalf("no token = %d, want 401", s)
+	}
 }

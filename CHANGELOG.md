@@ -14,6 +14,27 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ### Added
 
+- **Member-native long-term memory (RP-25).** Every swarm member gets its own
+  typed memory directory at `agents/{main,sub}/<name>/memory/` (auto-created
+  at construction, hot-add included): one fact per file with frontmatter plus
+  a `MEMORY.md` index — the solo memdir conventions, instantiated per member.
+  The index is injected into each WAKE message (same system-reminder as
+  currenttime), never the static prompt, so a weeks-long member's prompt
+  prefix stays byte-stable while its memory grows; a member with no saved
+  memories wakes with zero noise. Members carrying write/edit are auto-taught
+  the memory discipline protocol (save format, absolute dates,
+  update-before-finishing, pruning) in their team protocol. Governance is
+  write-own / read-all: writes confined to the member's own dir auto-allow
+  (the solo carve-out, re-homed via the new `pkg/agent.WithMemoryDir` SDK
+  option), writes to a SIBLING member's memory dir are denied in every
+  permission mode — bypass included — by a new fence in
+  `pkg/permission.Decide` that self-gates on swarm-homed agents (solo agents
+  in the same workspace are unaffected). Read-only web view:
+  `GET /api/agents/{name}/memory?space=<id>` (FE Memory tab deferred to the
+  FE batch). Per-member memory replaces the global `<appHome>/memory` store
+  for swarm members; the per-turn recall side-query is disabled for them
+  (wake-index + read-on-demand is the member protocol — no extra LLM cost
+  per wake).
 - **Per-member `permission_mode` (RP-24).** The coarse trust knob between the
   space-wide mode and RP-11's fine-grained `permissions.json` rules: any
   leader/worker entry in `evva-swarm.yml` may set

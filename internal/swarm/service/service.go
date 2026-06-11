@@ -1309,6 +1309,25 @@ func (s *Service) MemberSkills(id, agent string) ([]webapi.SkillInfo, bool) {
 	return out, true
 }
 
+// MemberMemory serves a member's long-term memory files read-only to the web
+// (RP-25). Thin adapter over the space's disk read — the dir the member itself
+// writes is the single source of truth, so the view is always current.
+func (s *Service) MemberMemory(id, agent string) ([]webapi.MemoryFileInfo, bool) {
+	ent, ok := s.entry(id)
+	if !ok {
+		return nil, false
+	}
+	files, err := ent.space.MemberMemoryFiles(agent)
+	if err != nil {
+		return nil, false // unknown member within a known space → 404
+	}
+	out := make([]webapi.MemoryFileInfo, 0, len(files))
+	for _, f := range files {
+		out = append(out, webapi.MemoryFileInfo{Name: f.Name, Content: f.Content})
+	}
+	return out, true
+}
+
 func (s *Service) AddSkill(id, agent string, spec webapi.SkillSpec) error {
 	ent, ok := s.entry(id)
 	if !ok {

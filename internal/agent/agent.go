@@ -105,6 +105,13 @@ type Agent struct {
 	memSnap    memdir.Snapshot
 	memSnapSet bool
 
+	// memDirOverride, when set (WithMemoryDir), re-homes the agent's writable
+	// auto-memory: after the snapshot is resolved, MemoryDir is forced to this
+	// path (write carve-out + recall target) and MemoryIndex is cleared — the
+	// host owns surfacing that store's index (e.g. the swarm injects it into
+	// wake prompts, RP-25), so it must never enter the static system prompt.
+	memDirOverride string
+
 	// permissionMode is the active stance the gate enforces. Subagents
 	// inherit the parent's mode (CLAUDE.md). Set via WithPermissionMode at
 	// construction; mutated at runtime by SetPermissionMode (e.g. the TUI's
@@ -375,6 +382,15 @@ func New(parent *Agent, profile Profile, opts ...Option) (*Agent, error) {
 		for _, w := range a.memSnap.Warnings {
 			lgr.Warn("memory: load", "msg", w)
 		}
+	}
+	// Re-home the writable memory store when the host asked for it
+	// (WithMemoryDir). Applied to BOTH snapshot paths — auto-loaded and
+	// host-injected — and after them, so the override always wins. Clearing
+	// MemoryIndex keeps the re-homed store's index out of the static prompt:
+	// the host surfaces it on its own channel (cache discipline, RP-25).
+	if a.memDirOverride != "" {
+		a.memSnap.MemoryDir = a.memDirOverride
+		a.memSnap.MemoryIndex = ""
 	}
 
 	// Auto-load the MCP manager (settings.json) unless a host injected one

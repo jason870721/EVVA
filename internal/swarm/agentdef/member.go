@@ -107,6 +107,16 @@ func PermissionsPath(workdir string, role Role, name string) string {
 	return filepath.Join(agentDir(workdir, role, name), "permissions.json")
 }
 
+// MemoryDir is a member's long-term memory directory (<agentDir>/memory/,
+// RP-25): typed *.md memory files plus the MEMORY.md index, living beside the
+// persona so it rides the same git/.gitignore decision as agents/. The space
+// creates it at member construction; the member writes it with the ordinary
+// file tools (its own dir auto-allows, siblings' deny), and the supervisor
+// injects the index into wake prompts.
+func MemoryDir(workdir string, role Role, name string) string {
+	return filepath.Join(agentDir(workdir, role, name), "memory")
+}
+
 // MemberDirExists reports whether a worker's on-disk definition already exists.
 // CreateMember uses it to tell "author a new member" (no dir) from "mount an
 // existing dir by name" (the CLI add-member path).
