@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/johnny1110/evva/pkg/common/proc"
 )
 
 // commandResult is the raw outcome of a single subprocess invocation.
@@ -52,7 +54,10 @@ func runCommand(
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	shell := "/bin/sh"
+	shell, shErr := proc.Shell()
+	if shErr != nil {
+		return commandResult{err: fmt.Errorf("hooks: %w", shErr)}
+	}
 	c := exec.CommandContext(cctx, shell, "-c", cmd.Command)
 	c.Env = baseEnv
 	c.Stdin = bytes.NewReader(payload)
