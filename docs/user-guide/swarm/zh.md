@@ -1,6 +1,6 @@
 # evva swarm 与 evva service — 用户指南（从 0 到精通）
 
-> 语言：[English](user-guide-en.md) ｜ **中文**
+> 语言：[English](en.md) ｜ **中文**
 > 读者：想让一群 evva agent 协作完成任务的人。
 > 内容：swarm 的工作原理，以及从零搭建一个 swarm 的完整教程。
 
@@ -353,7 +353,9 @@ Web 界面（`:8888`）针对每个 space 提供：
 - **单 agent 视图** —— 点一个成员，查看它的对话记录和收件箱。
 
 > **想直接玩、不想自己刻？** 這裡有一套現成的 example swarm：
-> [`example-swarm/`](example-swarm/) —— 複製出去、`evva swarm .`，照它的 README 走即可。
+> [`examples/evva-swarm/starter/`](../../../examples/evva-swarm/starter/) —— 複製出去、
+> `evva swarm .`,照它的 README 走即可。更大的 7 人團隊在
+> [`examples/evva-swarm/tech-team/`](../../../examples/evva-swarm/tech-team/)。
 
 典型的第一次运行：进入 space → 在 Member Console（聚焦 leader）里输入「搭一个 TODO REST API，
 带 Postgres schema 和一个小型 Web UI，把活分一下」→ 看着 leader
