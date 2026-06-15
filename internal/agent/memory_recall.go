@@ -66,6 +66,7 @@ func (a *Agent) runMemoryRecall(ctx context.Context, query string) string {
 //   - anthropic → claude-sonnet  (Sonnet-tier selection quality, ref parity), medium effort
 //   - deepseek  → deepseek-v4-flash (the cheap tier),                         medium effort
 //   - openai    → gpt-5.4-mini,                                               medium effort
+//   - glm       → glm-4.6 (the cheap tier),                                   medium effort
 //   - ollama / other → the active model + the main agent's effort (local / always reachable)
 //
 // The models are named explicitly (not derived from Models[0]) so the choice is
@@ -90,6 +91,8 @@ func (a *Agent) recallTarget() (constant.LLMProvider, constant.Model, int) {
 		return p, constant.DEEPSEEK_V4_FLASH, medium
 	case constant.OPENAI.Name:
 		return p, constant.GPT_5_4_MINI, medium
+	case constant.GLM.Name:
+		return p, constant.GLM_4_6, medium
 	default: // ollama + any custom provider: mirror the main agent exactly
 		return p, a.profile.LLMModel, a.mainEffortLevel()
 	}

@@ -18,6 +18,11 @@ var (
 	// If a non-reasoning model (gpt-4*, gpt-3.5*) is added here later, update
 	// pkg/llm/openai/client.go isReasoningModel to match.
 	OPENAI = LLMProvider{Name: "openai", ApiUrl: "https://api.openai.com", Models: []Model{GPT_5_4_MINI, GPT_5_5}}
+	// GLM — Zhipu AI / z.ai, reached over its Anthropic-compatible endpoint
+	// (same wire format as ANTHROPIC; pkg/llm/glm copies that engine and swaps
+	// auth to Authorization: Bearer). ApiUrl is the z.ai Anthropic gateway, so
+	// pkg/llm/glm hits ApiUrl + "/v1/messages".
+	GLM = LLMProvider{Name: "glm", ApiUrl: "https://api.z.ai/api/anthropic", Models: []Model{GLM_4_6, GLM_5_2}}
 )
 
 type Model string
@@ -37,10 +42,16 @@ const (
 	// OPENAI
 	GPT_5_4_MINI Model = "gpt-5.4-mini"
 	GPT_5_5      Model = "gpt-5.5"
+
+	// GLM (Zhipu / z.ai). glm-4.6 is the cheaper coding model (normal tier),
+	// glm-5.2 the flagship (big tier). Both are reached over the Anthropic-
+	// compatible endpoint; vision input requires a vision-capable GLM model.
+	GLM_4_6 Model = "glm-4.6"
+	GLM_5_2 Model = "glm-5.2"
 )
 
 func GetAllProviders() []LLMProvider {
-	return []LLMProvider{OLLAMA, ANTHROPIC, DEEPSEEK, OPENAI}
+	return []LLMProvider{OLLAMA, ANTHROPIC, DEEPSEEK, OPENAI, GLM}
 }
 
 func GetProvider(name string) (LLMProvider, bool) {
@@ -105,4 +116,6 @@ var MODEL_CONTEXT_SIZE = map[Model]int{
 	DEEPSEEK_V4_PRO:   1_000_000,
 	GPT_5_4_MINI:      400_000,
 	GPT_5_5:           1_050_000,
+	GLM_4_6:           200_000,
+	GLM_5_2:           1_000_000,
 }

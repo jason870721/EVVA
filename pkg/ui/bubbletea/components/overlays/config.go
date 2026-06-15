@@ -21,6 +21,10 @@ type ConfigField struct {
 	Kind  ConfigFieldKind
 	Get   func() string
 	Apply func(string) error
+	// Children is the nested field list for a cfgKindGroup row. Selecting
+	// such a row drills into these instead of opening an editor; Get/Apply
+	// are unused for groups.
+	Children []ConfigField
 }
 
 type ConfigFieldKind int
@@ -31,6 +35,7 @@ const (
 	cfgKindFloat
 	cfgKindBool
 	cfgKindSecret
+	cfgKindGroup // a drill-in row: Enter opens its Children as a sub-list
 )
 
 // Config is the /config form. Two modes:
@@ -50,6 +55,22 @@ type Config struct {
 	editor  *textinput.Model // nil in list mode
 	errMsg  string
 	liveMsg string
+
+	// Group drill-in: when groupFields is non-nil the list shows that nested
+	// slice (e.g. the llm-provider credentials) and Esc returns to the parent
+	// list at returnSel instead of closing the panel.
+	groupFields []ConfigField
+	groupLabel  string
+	returnSel   int
+}
+
+// current returns the field slice the cursor is navigating: the nested group
+// when drilled in, otherwise the top-level list.
+func (c *Config) current() []ConfigField {
+	if c.groupFields != nil {
+		return c.groupFields
+	}
+	return c.fields
 }
 
 // NewConfig opens the form, building the field list bound to the
@@ -72,7 +93,10 @@ func (c *Config) Hint() string {
 	if c.editor != nil {
 		return "[Enter] apply & save · [Esc] cancel edit"
 	}
-	return "[↑↓] navigate · [Enter] edit/toggle · [Esc] close"
+	if c.groupFields != nil {
+		return "[↑↓] navigate · [Enter] edit/toggle · [Esc] back"
+	}
+	return "[↑↓] navigate · [Enter] edit/toggle/open · [Esc] close"
 }
 
 // Update consumes keys while on top of the focus stack.
@@ -94,11 +118,11 @@ func (c *Config) Update(msg tea.Msg) (bool, tea.Cmd) {
 				return false, nil
 			case "enter":
 				val := c.editor.Value()
-				if err := c.fields[c.sel].Apply(val); err != nil {
+				if err := c.current()[c.sel].Apply(val); err != nil {
 					c.errMsg = err.Error()
 					return false, nil
 				}
-				c.liveMsg = fmt.Sprintf("%s saved", c.fields[c.sel].Label)
+				c.liveMsg = fmt.Sprintf("%s saved", c.current()[c.sel].Label)
 				c.errMsg = ""
 				c.editor = nil
 				return false, nil
@@ -119,6 +143,15 @@ func (c *Config) Update(msg tea.Msg) (bool, tea.Cmd) {
 	}
 	switch key.String() {
 	case "esc":
+		// Inside a group, Esc backs out to the parent list rather than closing.
+		if c.groupFields != nil {
+			c.groupFields = nil
+			c.groupLabel = ""
+			c.sel = c.returnSel
+			c.errMsg = ""
+			c.liveMsg = ""
+			return false, nil
+		}
 		return true, nil
 	case "ctrl+c":
 		return true, nil
@@ -129,13 +162,23 @@ func (c *Config) Update(msg tea.Msg) (bool, tea.Cmd) {
 		}
 		return false, nil
 	case "down", "j":
-		if c.sel < len(c.fields)-1 {
+		if c.sel < len(c.current())-1 {
 			c.sel++
 			c.errMsg = ""
 		}
 		return false, nil
 	case "enter":
-		f := c.fields[c.sel]
+		f := c.current()[c.sel]
+		// Group rows drill into their nested fields instead of editing.
+		if f.Kind == cfgKindGroup {
+			c.groupFields = f.Children
+			c.groupLabel = f.Label
+			c.returnSel = c.sel
+			c.sel = 0
+			c.errMsg = ""
+			c.liveMsg = ""
+			return false, nil
+		}
 		// Bools toggle in place — no editor needed.
 		if f.Kind == cfgKindBool {
 			cur := strings.TrimSpace(f.Get())
@@ -185,12 +228,17 @@ func (c *Config) View(width int, th *theme.Theme) string {
 
 func (c *Config) renderList(innerWidth int, th *theme.Theme) string {
 	_ = innerWidth
+	fields := c.current()
 	var b strings.Builder
-	b.WriteString(th.PanelHeader.Render("▰ /CONFIG"))
+	header := "▰ /CONFIG"
+	if c.groupFields != nil {
+		header = "▰ /CONFIG ▸ " + c.groupLabel
+	}
+	b.WriteString(th.PanelHeader.Render(header))
 	b.WriteByte('\n')
 
 	labelW := 0
-	for _, f := range c.fields {
+	for _, f := range fields {
 		if len(f.Label) > labelW {
 			labelW = len(f.Label)
 		}
@@ -199,14 +247,18 @@ func (c *Config) renderList(innerWidth int, th *theme.Theme) string {
 
 	sel := lipgloss.NewStyle().Foreground(extractFg(th.ContextFill)).Bold(true)
 	dim := th.DimText
-	for i, f := range c.fields {
+	for i, f := range fields {
 		marker := "  "
 		style := dim
 		if i == c.sel {
 			marker = "▶ "
 			style = sel
 		}
-		line := fmt.Sprintf("%s%-*s  %s", marker, labelW, f.Label, displayValue(f))
+		val := displayValue(f)
+		if f.Kind == cfgKindGroup {
+			val = "▸" // drill-in affordance instead of a value
+		}
+		line := fmt.Sprintf("%s%-*s  %s", marker, labelW, f.Label, val)
 		b.WriteString(style.Render(line))
 		b.WriteByte('\n')
 	}
@@ -218,14 +270,17 @@ func (c *Config) renderList(innerWidth int, th *theme.Theme) string {
 		b.WriteString(th.DimText.Render("✓ " + c.liveMsg))
 		b.WriteByte('\n')
 	}
-	b.WriteString(th.FooterHint.Render(
-		"[↑↓] navigate · [Enter] edit/toggle · [Esc] close"))
+	footer := "[↑↓] navigate · [Enter] edit/toggle/open · [Esc] close"
+	if c.groupFields != nil {
+		footer = "[↑↓] navigate · [Enter] edit/toggle · [Esc] back"
+	}
+	b.WriteString(th.FooterHint.Render(footer))
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func (c *Config) renderEditor(innerWidth int, th *theme.Theme) string {
 	_ = innerWidth
-	f := c.fields[c.sel]
+	f := c.current()[c.sel]
 
 	var b strings.Builder
 	b.WriteString(th.PanelHeader.Render(fmt.Sprintf("▰ EDIT %s", f.Label)))
@@ -415,14 +470,29 @@ func buildConfigFields(cfg *config.Config, ctrl ui.Controller) []ConfigField {
 			Get:   func() string { return cfg.TavilyAPIKey },
 			Apply: func(s string) error { return cfg.SetTavilyAPIKey(strings.TrimSpace(s)) },
 		},
-		providerKeyField(cfg, constant.ANTHROPIC.Name),
-		providerURLField(cfg, constant.ANTHROPIC.Name),
-		providerKeyField(cfg, constant.DEEPSEEK.Name),
-		providerURLField(cfg, constant.DEEPSEEK.Name),
-		providerKeyField(cfg, constant.OPENAI.Name),
-		providerURLField(cfg, constant.OPENAI.Name),
-		providerURLField(cfg, constant.OLLAMA.Name),
+		{
+			Label:    "llm-provider",
+			Kind:     cfgKindGroup,
+			Children: buildProviderFields(cfg),
+		},
 	}
+}
+
+// buildProviderFields returns the per-provider api_key / api_url rows shown
+// under the "llm-provider" group. Driven by constant.GetAllProviders() so a
+// newly registered provider appears automatically. Cloud providers come first
+// (key + url each); Ollama is local + key-less, so it gets a lone api_url row
+// pinned last.
+func buildProviderFields(cfg *config.Config) []ConfigField {
+	out := []ConfigField{}
+	for _, p := range constant.GetAllProviders() {
+		if p.Name == constant.OLLAMA.Name {
+			continue
+		}
+		out = append(out, providerKeyField(cfg, p.Name), providerURLField(cfg, p.Name))
+	}
+	out = append(out, providerURLField(cfg, constant.OLLAMA.Name))
+	return out
 }
 
 func providerKeyField(cfg *config.Config, name string) ConfigField {
@@ -461,6 +531,9 @@ func maskSecret(s string) string {
 // displayValue returns the user-facing string for a field's
 // current value, applying mask for secrets and "(empty)" for blanks.
 func displayValue(f ConfigField) string {
+	if f.Get == nil {
+		return ""
+	}
 	v := f.Get()
 	if f.Kind == cfgKindSecret {
 		return maskSecret(v)

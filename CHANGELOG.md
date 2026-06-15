@@ -12,6 +12,31 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ## [Unreleased]
 
+### Added
+
+- **GLM (Zhipu AI / z.ai) LLM provider.** New `pkg/llm/glm` provider reached over
+  z.ai's Anthropic-compatible endpoint (`https://api.z.ai/api/anthropic`), so it
+  rides the same Messages wire format as `pkg/llm/claude` — content/image/thinking
+  blocks, SSE streaming, and `output_config.effort` — with `Authorization: Bearer`
+  auth (z.ai's `ANTHROPIC_AUTH_TOKEN` scheme) instead of `x-api-key`. Two
+  switchable models: `glm-4.6` (normal tier, ~200K ctx) and `glm-5.2` (big tier,
+  flagship, ~1M ctx). evva's four effort levels collapse onto GLM-5.2's two
+  thinking-effort tiers (low/medium → High, high/ultra → Max). Read-file images are
+  forwarded to GLM as Anthropic base64 image blocks with no extra wiring — image
+  *understanding* requires a vision-capable GLM model. Configure with `/config`
+  (`glm.api_key`) or the `glm:` block in the YAML config; surfaces automatically in
+  the `/model` picker.
+
+### Changed
+
+- **`/config` groups provider credentials under a drill-in `llm-provider` row.**
+  The per-provider `api_key` / `api_url` fields (now 9 with GLM) no longer clutter
+  the flat settings list — they collapse into one `llm-provider ▸` entry; `Enter`
+  opens the provider sub-list (breadcrumb `▰ /CONFIG ▸ llm-provider`), `Esc` backs
+  out. The sub-list is built from `constant.GetAllProviders()`, so a newly
+  registered provider appears automatically (Ollama stays a lone, key-less
+  `api_url` pinned last). New `cfgKindGroup` field kind in the config overlay.
+
 ## [v1.7.5-beta.1] — 2026-06-15
 
 ### Added

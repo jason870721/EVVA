@@ -101,25 +101,43 @@ User-installed skills appear here too — anything you've dropped in `~/.evva/sk
 Opens a bordered form listing every editable setting:
 
 ```
-┌─ /CONFIG ────────────────────────────────────────┐
-│ ▶ max_iterations           30                    │
-│   max_tokens               4096                  │
-│   auto_compact_threshold   0.8                   │
-│   display_thinking         true                  │
-│   fetch_max_bytes          100000                │
-│   tavily_api_key           ****wxyz              │
-│   anthropic.api_key        (empty)               │
-│   …                                              │
-│ [↑↓] navigate · [Enter] edit/toggle · [Esc] close│
-└──────────────────────────────────────────────────┘
+┌─ /CONFIG ──────────────────────────────────────────────┐
+│ ▶ max_iterations           30                          │
+│   max_tokens               4096                        │
+│   auto_compact_threshold   0.8                         │
+│   display_thinking         true                        │
+│   fetch_max_bytes          100000                      │
+│   tavily_api_key           ****wxyz                    │
+│   llm-provider             ▸                           │
+│ [↑↓] navigate · [Enter] edit/toggle/open · [Esc] close │
+└──────────────────────────────────────────────────────┘
+```
+
+The LLM provider credentials live under the `llm-provider ▸` row — press
+`Enter` to drill into the per-provider `api_key` / `api_url` fields, `Esc` to
+back out to the main list:
+
+```
+┌─ /CONFIG ▸ llm-provider ───────────────────────────────┐
+│ ▶ anthropic.api_key        (empty)                     │
+│   anthropic.api_url        https://api.anthropic.com   │
+│   deepseek.api_key         ****wxyz                    │
+│   deepseek.api_url         https://api.deepseek.com    │
+│   openai.api_key           (empty)                     │
+│   openai.api_url           https://api.openai.com      │
+│   glm.api_key              (empty)                     │
+│   glm.api_url              https://api.z.ai/api/anthr… │
+│   ollama.api_url           http://localhost:11434      │
+│ [↑↓] navigate · [Enter] edit/toggle · [Esc] back       │
+└──────────────────────────────────────────────────────┘
 ```
 
 | key | effect |
 | --- | --- |
 | `↑` / `↓` | move the cursor |
-| `Enter` | edit the focused field (booleans toggle in-place) |
+| `Enter` | edit the focused field (booleans toggle in-place; `llm-provider` opens the provider sub-list) |
 | `Enter` (in editor) | apply and save |
-| `Esc` | cancel the edit (or close the panel from list mode) |
+| `Esc` | cancel the edit, back out of the provider sub-list, or close the panel from the top-level list |
 
 API key fields open a password-masked editor; pasting works (display stays masked).
 
@@ -234,7 +252,7 @@ Adjusts the model's reasoning depth. Four tiers:
 | `high` | non-trivial reasoning, multi-step refactors |
 | `ultra` | architectural calls, subtle bug hunts |
 
-Each provider maps these onto its own knob — Anthropic effort levels, DeepSeek thinking on/off + tier, OpenAI reasoning effort, etc. Providers with only a coarse on/off switch map `low` → off and the rest → on. The chosen tier persists as `default_effort` and is shown in the status bar (`▸ model · ⚡high`).
+Each provider maps these onto its own knob — Anthropic effort levels, DeepSeek thinking on/off + tier, OpenAI reasoning effort, GLM's two thinking-effort tiers (low/medium → High, high/ultra → Max), etc. Providers with only a coarse on/off switch map `low` → off and the rest → on. The chosen tier persists as `default_effort` and is shown in the status bar (`▸ model · ⚡high`).
 
 ### /resume — Resume a Previous Session
 
@@ -806,13 +824,17 @@ tavily_api_key: ""
 # Memory (typed-memory directory at ~/.evva/memory/)
 enable_auto_memory: true     # memory guidance + MEMORY.md index + write carve-out + recall
 enable_memory_recall: true   # per-turn relevance side-query (cost lever; false keeps the index only)
-memory_recall_model: ""      # empty = cheap model in the active provider (anthropic→sonnet, deepseek→flash, openai→gpt-5.4-mini @ medium; ollama→active model+effort)
+memory_recall_model: ""      # empty = cheap model in the active provider (anthropic→sonnet, deepseek→flash, openai→gpt-5.4-mini, glm→glm-4.6 @ medium; ollama→active model+effort)
 
 # Per-provider credentials. Empty api_url falls back to the constant's default.
+# glm (Zhipu/z.ai) speaks the Anthropic-compatible endpoint; reading an image
+# feeds it to GLM as an image block, but understanding it needs a vision-capable
+# GLM model. Models: glm-4.6 (normal) and glm-5.2 (big, ~1M ctx).
 providers:
   anthropic: { api_key: "", api_url: "" }
   deepseek:  { api_key: "", api_url: "" }
   openai:    { api_key: "", api_url: "" }
+  glm:       { api_key: "", api_url: "" }
   ollama:    { api_url: "" }
 ```
 

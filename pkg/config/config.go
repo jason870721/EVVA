@@ -144,8 +144,8 @@ type Config struct {
 
 	// MemoryRecallModel optionally pins the recall side-query model id. Empty →
 	// a cheap model within the active provider (anthropic: sonnet, deepseek:
-	// flash, openai: gpt-5.4-mini at medium effort; ollama/other: the active
-	// model + the main agent's effort). See internal/agent recall wiring.
+	// flash, openai: gpt-5.4-mini, glm: glm-4.6 at medium effort; ollama/other:
+	// the active model + the main agent's effort). See internal/agent recall wiring.
 	MemoryRecallModel string
 
 	// Web tools

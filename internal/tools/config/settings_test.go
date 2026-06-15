@@ -23,6 +23,7 @@ func TestSupportedSettingsKeys(t *testing.T) {
 		"enable_auto_memory",
 		"enable_memory_recall",
 		"fetch_max_bytes",
+		"glm.api_key", "glm.api_url",
 		"max_iterations", "max_tokens",
 		"memory_recall_model",
 		"ollama.api_url",

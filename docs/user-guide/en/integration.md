@@ -20,11 +20,11 @@ go get github.com/johnny1110/evva
 
 ### 2. Pick your providers
 
-Blank-import `pkg/llm/builtins` to register Anthropic / DeepSeek / Ollama on the default registry; or register a custom provider yourself.
+Blank-import `pkg/llm/builtins` to register Anthropic / DeepSeek / GLM / OpenAI / Ollama on the default registry; or register a custom provider yourself.
 
 ```go
 import (
-    _ "github.com/johnny1110/evva/pkg/llm/builtins" // anthropic/deepseek/ollama
+    _ "github.com/johnny1110/evva/pkg/llm/builtins" // anthropic/deepseek/glm/openai/ollama
     "github.com/johnny1110/evva/pkg/llm"
 )
 

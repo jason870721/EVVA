@@ -16,7 +16,7 @@ func setupGlobalParam(cfg *Config) {
 
 // setupLLMProviderConfig wires per-provider credentials from the YAML
 // file config. Providers with an empty api_url fall back to the
-// constant's built-in default. Anthropic/DeepSeek/OpenAI need an api_key
+// constant's built-in default. Anthropic/DeepSeek/OpenAI/GLM need an api_key
 // to be listed; Ollama is local and key-less.
 func setupLLMProviderConfig(cfg *Config, fc FileConfig) {
 	cfg.LLMProviderConfig = map[string]APIConfig{}
@@ -37,4 +37,5 @@ func setupLLMProviderConfig(cfg *Config, fc FileConfig) {
 	register(constant.ANTHROPIC, fc.Providers[constant.ANTHROPIC.Name], true)
 	register(constant.DEEPSEEK, fc.Providers[constant.DEEPSEEK.Name], true)
 	register(constant.OPENAI, fc.Providers[constant.OPENAI.Name], true)
+	register(constant.GLM, fc.Providers[constant.GLM.Name], true)
 }

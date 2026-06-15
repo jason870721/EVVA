@@ -4,7 +4,7 @@ This file is evva's working agreement: **coding conventions and the release work
 loaded as project instructions each session — keep it operational.
 
 `evva` is a ReAct coding agent for the terminal, written in Go: one narrow `llm.Client`
-interface across providers (Anthropic, DeepSeek, OpenAI, Ollama), one `tools.Tool` interface,
+interface across providers (Anthropic, DeepSeek, GLM, OpenAI, Ollama), one `tools.Tool` interface,
 one observable store fanning state to any UI, one agent loop. The unifying idea is **one
 runtime, many personas, swappable UI**.
 

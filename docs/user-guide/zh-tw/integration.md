@@ -20,11 +20,11 @@ go get github.com/johnny1110/evva
 
 ### 2. 挑選你的 providers
 
-空白匯入(blank-import)`pkg/llm/builtins`,即可在預設 registry 上註冊 Anthropic / DeepSeek / Ollama;或者你自己註冊一個自訂 provider。
+空白匯入(blank-import)`pkg/llm/builtins`,即可在預設 registry 上註冊 Anthropic / DeepSeek / GLM / OpenAI / Ollama;或者你自己註冊一個自訂 provider。
 
 ```go
 import (
-    _ "github.com/johnny1110/evva/pkg/llm/builtins" // anthropic/deepseek/ollama
+    _ "github.com/johnny1110/evva/pkg/llm/builtins" // anthropic/deepseek/glm/openai/ollama
     "github.com/johnny1110/evva/pkg/llm"
 )
 

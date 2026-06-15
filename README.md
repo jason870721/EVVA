@@ -8,7 +8,7 @@ A ReAct coding agent in your terminal. Multi-provider LLM, parallel tool dispatc
 
 ![evva_logo.png](docs/assets/logo-3.jpg)
 
-`evva` runs a tool-using LLM agent in your terminal. It speaks Anthropic Claude, DeepSeek, OpenAI, and Ollama through one `llm.Client` interface; dispatches multiple tool calls per turn in parallel; tracks tasks and sub-agents through an observable store; and renders into a bubbletea TUI or a plain-text CLI sink.
+`evva` runs a tool-using LLM agent in your terminal. It speaks Anthropic Claude, DeepSeek, GLM (Zhipu/z.ai), OpenAI, and Ollama through one `llm.Client` interface; dispatches multiple tool calls per turn in parallel; tracks tasks and sub-agents through an observable store; and renders into a bubbletea TUI or a plain-text CLI sink.
 
 The architecture is small on purpose — adding a new LLM provider, panel, or UI implementation is roughly one package each.
 
@@ -116,7 +116,7 @@ Two ways:
 1. **From inside the TUI:** type `/config`, navigate to `<provider>.api_key`, press Enter, paste your key, press Enter again. Saved immediately.
 2. **By hand:** open `~/.evva/config/evva-config.yml` and fill in `providers.<provider>.api_key`.
 
-Cloud providers (Anthropic, DeepSeek, OpenAI) need a key; Ollama is local and key-less.
+Cloud providers (Anthropic, DeepSeek, GLM, OpenAI) need a key; Ollama is local and key-less.
 
 ---
 
@@ -205,10 +205,12 @@ fetch_max_bytes: 100000
 tavily_api_key: ""
 
 # Per-provider credentials. Empty api_url falls back to the constant's default.
+# glm = Zhipu AI / z.ai over its Anthropic-compatible endpoint (models glm-4.6, glm-5.2).
 providers:
   anthropic: { api_key: "", api_url: "" }
   deepseek:  { api_key: "", api_url: "" }
   openai:    { api_key: "", api_url: "" }
+  glm:       { api_key: "", api_url: "" }
   ollama:    { api_url: "" }
 ```
 

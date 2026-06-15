@@ -108,25 +108,42 @@
 開啟一個帶邊框的表單，列出所有可編輯的設定：
 
 ```
-┌─ /CONFIG ────────────────────────────────────────┐
-│ ▶ max_iterations           30                    │
-│   max_tokens               4096                  │
-│   auto_compact_threshold   0.8                   │
-│   display_thinking         true                  │
-│   fetch_max_bytes          100000                │
-│   tavily_api_key           ****wxyz              │
-│   anthropic.api_key        (empty)               │
-│   …                                              │
-│ [↑↓] navigate · [Enter] edit/toggle · [Esc] close│
-└──────────────────────────────────────────────────┘
+┌─ /CONFIG ──────────────────────────────────────────────┐
+│ ▶ max_iterations           30                          │
+│   max_tokens               4096                        │
+│   auto_compact_threshold   0.8                         │
+│   display_thinking         true                        │
+│   fetch_max_bytes          100000                      │
+│   tavily_api_key           ****wxyz                    │
+│   llm-provider             ▸                           │
+│ [↑↓] navigate · [Enter] edit/toggle/open · [Esc] close │
+└──────────────────────────────────────────────────────┘
+```
+
+各家 LLM 供應商的憑證收在 `llm-provider ▸` 這一列底下——按 `Enter`
+進入各供應商的 `api_key` / `api_url` 欄位，按 `Esc` 返回主列表：
+
+```
+┌─ /CONFIG ▸ llm-provider ───────────────────────────────┐
+│ ▶ anthropic.api_key        (empty)                     │
+│   anthropic.api_url        https://api.anthropic.com   │
+│   deepseek.api_key         ****wxyz                    │
+│   deepseek.api_url         https://api.deepseek.com    │
+│   openai.api_key           (empty)                     │
+│   openai.api_url           https://api.openai.com      │
+│   glm.api_key              (empty)                     │
+│   glm.api_url              https://api.z.ai/api/anthr… │
+│   ollama.api_url           http://localhost:11434      │
+│ [↑↓] navigate · [Enter] edit/toggle · [Esc] back       │
+└──────────────────────────────────────────────────────┘
 ```
 
 | 按鍵 | 效果 |
 | --- | --- |
 | `↑` / `↓` | 移動游標 |
-| `Enter` | 編輯聚焦的欄位（布林值直接切換） |
+| `Enter` | 編輯聚焦的欄位（布林值直接切換；`llm-provider` 會展開供應商子列表） |
 | `Enter`（編輯器中） | 套用並儲存 |
-| `Esc` | 取消編輯（或在列表模式關閉面板） |
+| `Esc` | 取消編輯、從供應商子列表返回，或在頂層列表關閉面板 |
 
 API 金鑰欄位會開啟密碼遮罩編輯器；貼上功能照常運作（顯示維持遮罩狀態）。
 
@@ -239,7 +256,7 @@ display_thinking 設定是什麼？」「把 auto-memory 關掉」「將 max_ite
 | `high` | 非簡單的推理、多步驟重構 |
 | `ultra` | 架構性決策、難以察覺的 bug 排查 |
 
-各提供者會把這四個等級對應到自己的旋鈕——Anthropic 的 effort 等級、DeepSeek 的 thinking 開關 + 等級、OpenAI 的 reasoning effort 等。對於只有粗略開/關開關的提供者，`low` → 關閉，其餘 → 開啟。所選的等級會儲存為 `default_effort`，並顯示在狀態列上（`▸ model · ⚡high`）。
+各提供者會把這四個等級對應到自己的旋鈕——Anthropic 的 effort 等級、DeepSeek 的 thinking 開關 + 等級、OpenAI 的 reasoning effort、GLM 的兩段 thinking 等級（low/medium → High、high/ultra → Max）等。對於只有粗略開/關開關的提供者，`low` → 關閉，其餘 → 開啟。所選的等級會儲存為 `default_effort`，並顯示在狀態列上（`▸ model · ⚡high`）。
 
 ### /resume — 還原先前的工作階段
 
@@ -810,13 +827,16 @@ tavily_api_key: ""
 # 記憶（位於 ~/.evva/memory/ 的型別化記憶目錄）
 enable_auto_memory: true     # 記憶指引 + MEMORY.md 索引 + 寫入豁免 + 召回
 enable_memory_recall: true   # 每回合相關性側查詢（成本開關；設為 false 只保留索引）
-memory_recall_model: ""      # 留空 = 當前供應商中較便宜的模型（anthropic→sonnet、deepseek→flash、openai→gpt-5.4-mini @ medium；ollama→當前模型+effort）
+memory_recall_model: ""      # 留空 = 當前供應商中較便宜的模型（anthropic→sonnet、deepseek→flash、openai→gpt-5.4-mini、glm→glm-4.6 @ medium；ollama→當前模型+effort）
 
 # Per-provider credentials. Empty api_url falls back to the constant's default.
+# glm（Zhipu/z.ai）走 Anthropic 相容端點;讀取圖片會以 image block 餵給 GLM,
+# 但要「看懂」圖片需選用具備 vision 能力的 GLM 模型。模型:glm-4.6(一般)、glm-5.2(大型,~1M ctx)。
 providers:
   anthropic: { api_key: "", api_url: "" }
   deepseek:  { api_key: "", api_url: "" }
   openai:    { api_key: "", api_url: "" }
+  glm:       { api_key: "", api_url: "" }
   ollama:    { api_url: "" }
 ```
 

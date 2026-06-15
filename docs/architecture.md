@@ -9,7 +9,7 @@
 
 ## Vision
 
-`evva` is a ReAct coding agent for the terminal, written in Go. The architecture follows Claude Code in spirit but keeps the moving parts small on purpose: one narrow `llm.Client` interface bridging multiple providers (Anthropic, DeepSeek, OpenAI, Ollama), one `tools.Tool` interface, one observable store fanning state to any UI implementation, one agent loop.
+`evva` is a ReAct coding agent for the terminal, written in Go. The architecture follows Claude Code in spirit but keeps the moving parts small on purpose: one narrow `llm.Client` interface bridging multiple providers (Anthropic, DeepSeek, GLM, OpenAI, Ollama), one `tools.Tool` interface, one observable store fanning state to any UI implementation, one agent loop.
 
 The unifying idea is **one runtime, many personas, swappable UI**:
 
@@ -57,8 +57,9 @@ One schema, one loader, two visibility surfaces. This is also the seam that prof
 |---|---|---|
 | `pkg/agent` | Agent constructor + controller interface | `New(Config) (Agent, error)`, `Agent` interface (~20 methods matching `ui.Controller`) |
 | `pkg/llm` | LLM provider abstraction | `Client` interface, `Registry`, `Message`, `Response`, `Chunk`, `ChunkSink` |
-| `pkg/llm/builtins` | Provider registration | `init()` registers Anthropic, DeepSeek, OpenAI, Ollama factories |
+| `pkg/llm/builtins` | Provider registration | `init()` registers Anthropic, DeepSeek, GLM, OpenAI, Ollama factories |
 | `pkg/llm/claude` | Anthropic Messages API | Implements `Client` |
+| `pkg/llm/glm` | GLM (Zhipu/z.ai) via Anthropic-compatible endpoint | Self-contained copy of the claude engine with Bearer auth; implements `Client` |
 | `pkg/llm/deepseek` | DeepSeek API (OpenAI-compatible) | Implements `Client` |
 | `pkg/llm/openai` | OpenAI Chat Completions API | Implements `Client` |
 | `pkg/llm/ollama` | Ollama local API | Implements `Client` |
