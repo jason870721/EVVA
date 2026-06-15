@@ -15,18 +15,27 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 ### Added
 
 - **Swarm web: multi-select bulk roster actions.** The roster gains a `✓ select`
-  mode that turns member cards into checkbox rows and surfaces a bulk action bar:
-  **clear session**, **compact** (micro / full), and the lifecycle verbs
-  **suspend / resume / freeze / unfreeze**. Each button acts only on the selected
-  members eligible for it (clear/compact skip a member with a run in flight; the
-  lifecycle verbs are state-gated) and shows its live count; `idle` / `none`
-  shortcuts help target a subset. Actions fan the existing per-member endpoints
-  out concurrently (the supervisor locks per member), refresh once, and report a
-  summary (`compacted 3 · skipped 1 (...)`) so a member that goes busy mid-flight
-  is surfaced rather than silently dropped. Destructive bulk ops (clear, full
-  compact) confirm first, escalating to a type-to-confirm phrase past 4 members.
+  mode that turns member cards into prominent checkbox rows and pins a bulk
+  control bar to the top: a tri-state **select-all** (with an `idle` shortcut and
+  a live `n / m selected` count) over two action groups — **clear session** and
+  **compact** (micro / full), plus the lifecycle verbs **suspend / resume /
+  freeze / unfreeze**. Each button acts only on the selected members eligible for
+  it (clear/compact skip a member with a run in flight; the lifecycle verbs are
+  state-gated) and shows its live count. Every action — not just the destructive
+  ones — routes through a confirm → live-progress dialog: it lists exactly what
+  will run and what is skipped (with the reason), then, once confirmed, locks and
+  flips each member from a spinner to ✓ / ✗ as its own request settles (the
+  fan-out can't be closed mid-flight), and finally reports the tally. Clear and
+  full-compact are gated by a type-to-confirm phrase past 4 members; members that
+  succeeded are unticked afterward, leaving any that failed selected for a retry.
+  Actions fan the existing per-member endpoints out concurrently (the supervisor
+  locks per member), refreshing the roster once. The roster also now **sorts by
+  activity** so a long team never buries an active worker: leader pinned, then
+  needs-attention (same signal as the AttentionStrip, stalls included) → busy →
+  idle → suspended → frozen, alphabetical within a tier, animated on reshuffle.
   No new `pkg/*` surface or backend endpoint — pure web2 (store `bulkClear` /
-  `bulkCompact` / `bulkCmd` + per-member in-flight flags).
+  `bulkCompact` / `bulkCmd` with a per-member progress callback + per-member
+  in-flight flags; pure `orderRoster` helper in `lib/events`).
 
 ### Fixed
 

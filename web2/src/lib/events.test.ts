@@ -17,6 +17,7 @@ import {
   attentionKind,
   elapsed,
   attentionItems,
+  orderRoster,
   relTime,
   contextUsage,
   humanTokens,
@@ -402,4 +403,38 @@ test('humanTokens matches the TUI k/M thresholds', () => {
   assert.equal(humanTokens(42_000), '42k')
   assert.equal(humanTokens(500_000), '500k')
   assert.equal(humanTokens(1_050_000), '1.1M')
+})
+
+const names = (ms) => ms.map((m) => m.name)
+
+test('orderRoster: leader pins first, then attention → busy → idle → suspended → frozen', () => {
+  const roster = [
+    { name: 'finn', role: 'worker', run: 'idle', membership: 'frozen' },
+    { name: 'erin', role: 'worker', run: 'idle', membership: 'active' },
+    { name: 'dave', role: 'worker', run: 'busy', membership: 'active' },
+    { name: 'bob', role: 'worker', run: 'busy', membership: 'active' },
+    { name: 'gwen', role: 'worker', run: 'suspended', membership: 'active' },
+    { name: 'lead', role: 'leader', run: 'idle', membership: 'active' },
+  ]
+  // bob needs attention (e.g. errored / stalled) — floats above the other busy.
+  assert.deepEqual(names(orderRoster(roster, ['bob'])), ['lead', 'bob', 'dave', 'erin', 'gwen', 'finn'])
+})
+
+test('orderRoster: attention tier keeps the given urgency order, not alphabetical', () => {
+  const roster = [
+    { name: 'amy', role: 'worker', run: 'idle', membership: 'active' },
+    { name: 'zed', role: 'worker', run: 'idle', membership: 'active' },
+  ]
+  // zed is more urgent (listed first) despite sorting after amy alphabetically.
+  assert.deepEqual(names(orderRoster(roster, ['zed', 'amy'])), ['zed', 'amy'])
+})
+
+test('orderRoster: alphabetical within a tier and pure (no mutation)', () => {
+  const roster = [
+    { name: 'carol', role: 'worker', run: 'idle', membership: 'active' },
+    { name: 'alice', role: 'worker', run: 'idle', membership: 'active' },
+  ]
+  const out = orderRoster(roster, [])
+  assert.deepEqual(names(out), ['alice', 'carol'])
+  assert.deepEqual(names(roster), ['carol', 'alice']) // input untouched
 })

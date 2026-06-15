@@ -129,9 +129,45 @@ function permTone(mode: string): 'warning' | 'info' {
   border-color: var(--color-accent);
   background: var(--color-surface);
 }
+/* Custom checkbox: the native control is tiny and easy to miss on the dark
+   card. Draw a clear bordered box that fills with the accent + a ✓ when ticked.
+   Scoped to the card, so other checkboxes (confirm dialogs, gates) are unaffected. */
 .pick {
-  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
   margin: 0;
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--r-sm);
+  background: var(--color-bg);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.pick:hover {
+  border-color: var(--color-accent);
+}
+.pick:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.pick:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.pick:checked::after {
+  content: '✓';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--btn-primary-fg);
 }
 .cspin {
   margin-left: auto;

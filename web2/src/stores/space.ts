@@ -104,55 +104,90 @@ export const useSpaceStore = defineStore('space', {
     },
     // Fan `op` out across `names` concurrently (the per-member endpoints are
     // independent), refresh the roster once at the end, and report which
-    // succeeded vs failed. Callers pre-filter by eligibility (a busy member
-    // can't be cleared/compacted); allSettled still catches the member that
-    // goes busy between the filter and the request → a 409 lands in `failed`.
-    async bulkRun(names: string[], op: (name: string) => Promise<void>): Promise<BulkResult> {
-      const settled = await Promise.allSettled(names.map((n) => op(n)))
-      await this.refresh()
+    // succeeded vs failed. `onSettled` fires the moment each member's request
+    // lands (not at the end), so a live UI can flip that member from a spinner
+    // to ✓ / ✗ as it goes. Callers pre-filter by eligibility (a busy member
+    // can't be cleared/compacted); the per-op try/catch still catches the
+    // member that goes busy between the filter and the request → a 409 lands in
+    // `failed` rather than rejecting the whole fan-out.
+    async bulkRun(
+      names: string[],
+      op: (name: string) => Promise<void>,
+      onSettled?: (name: string, error?: string) => void,
+    ): Promise<BulkResult> {
       const ok: string[] = []
       const failed: { name: string; error: string }[] = []
-      settled.forEach((r, i) => {
-        if (r.status === 'fulfilled') ok.push(names[i])
-        else failed.push({ name: names[i], error: errMsg(r.reason) })
-      })
+      await Promise.all(
+        names.map(async (n) => {
+          try {
+            await op(n)
+            ok.push(n)
+            onSettled?.(n)
+          } catch (e) {
+            const error = errMsg(e)
+            failed.push({ name: n, error })
+            onSettled?.(n, error)
+          }
+        }),
+      )
+      await this.refresh()
       return { ok, failed }
     },
-    bulkCompact(names: string[], kind: 'micro' | 'full'): Promise<BulkResult> {
+    bulkCompact(
+      names: string[],
+      kind: 'micro' | 'full',
+      onSettled?: (name: string, error?: string) => void,
+    ): Promise<BulkResult> {
       const id = useConnectionStore().spaceId
       if (!id) return Promise.resolve({ ok: [], failed: [] })
-      return this.bulkRun(names, async (n) => {
-        this.compacting[n] = true
-        try {
-          await api.compactMember(id, n, kind)
-        } finally {
-          this.compacting[n] = false
-        }
-      })
+      return this.bulkRun(
+        names,
+        async (n) => {
+          this.compacting[n] = true
+          try {
+            await api.compactMember(id, n, kind)
+          } finally {
+            this.compacting[n] = false
+          }
+        },
+        onSettled,
+      )
     },
-    bulkClear(names: string[]): Promise<BulkResult> {
+    bulkClear(names: string[], onSettled?: (name: string, error?: string) => void): Promise<BulkResult> {
       const id = useConnectionStore().spaceId
       if (!id) return Promise.resolve({ ok: [], failed: [] })
-      return this.bulkRun(names, async (n) => {
-        this.clearing[n] = true
-        try {
-          await api.clearMember(id, n)
-        } finally {
-          this.clearing[n] = false
-        }
-      })
+      return this.bulkRun(
+        names,
+        async (n) => {
+          this.clearing[n] = true
+          try {
+            await api.clearMember(id, n)
+          } finally {
+            this.clearing[n] = false
+          }
+        },
+        onSettled,
+      )
     },
-    bulkCmd(verb: 'suspend' | 'resume' | 'freeze' | 'unfreeze', names: string[]): Promise<BulkResult> {
+    bulkCmd(
+      verb: 'suspend' | 'resume' | 'freeze' | 'unfreeze',
+      names: string[],
+      onSettled?: (name: string, error?: string) => void,
+    ): Promise<BulkResult> {
       const id = useConnectionStore().spaceId
       if (!id) return Promise.resolve({ ok: [], failed: [] })
-      return this.bulkRun(names, async (n) => {
-        this.acting[n] = true
-        try {
-          await api[verb](id, n)
-        } finally {
-          this.acting[n] = false
-        }
-      })
+      return this.bulkRun(
+        names,
+        async (n) => {
+          this.acting[n] = true
+          try {
+            await api[verb](id, n)
+          } finally {
+            this.acting[n] = false
+          }
+        },
+        onSettled,
+      )
     },
     // Switch a member's permission stance (default | accept_edits | bypass).
     async setPermissionMode(name: string, mode: string) {

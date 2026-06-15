@@ -187,6 +187,21 @@ describe('space store · bulk ops', () => {
     expect(sp.memberBusy('a')).toBe(false)
     expect(sp.memberBusy('b')).toBe(false)
   })
+
+  it('fires onSettled per member as each lands (ok and error)', async () => {
+    const sp = useSpaceStore()
+    vi.spyOn(api, 'roster').mockResolvedValue([])
+    vi.spyOn(api, 'compactMember').mockImplementation((_id, name) =>
+      name === 'b' ? Promise.reject(new Error('409 busy')) : Promise.resolve(null),
+    )
+    const events: Record<string, string> = {}
+    const r = await sp.bulkCompact(['a', 'b'], 'full', (name, error) => {
+      events[name] = error ?? 'ok'
+    })
+    expect(events).toEqual({ a: 'ok', b: '409 busy' })
+    expect(r.ok).toEqual(['a'])
+    expect(r.failed).toEqual([{ name: 'b', error: '409 busy' }])
+  })
 })
 
 describe('proposals store', () => {
