@@ -7,6 +7,12 @@ import { useConnectionStore } from './connection'
 import { useStreamStore } from './stream'
 import { useUiStore } from './ui'
 
+// Outcome of a bulk action fanned out across members: the per-member endpoints
+// are independent (the supervisor locks per member), so we run them concurrently
+// and report which landed vs which were refused (e.g. a member that went busy
+// mid-flight → 409).
+export type BulkResult = { ok: string[]; failed: { name: string; error: string }[] }
+
 // space holds the polled roster (structure) and overlays the live event-derived
 // phase from the stream store (freshness) — the store-side twin of v1
 // SpaceView.mergedRoster. `now` ticks (driven by useSwarm) so elapsed clocks stay
@@ -16,6 +22,18 @@ export const useSpaceStore = defineStore('space', {
     roster: [] as MemberInfo[],
     now: Date.now(),
     error: '',
+    // Per-member compaction in-flight flags. A full compact is a multi-second
+    // LLM call, so its busy state has to outlive whichever component triggered
+    // it: the inspector is reused across members (no :key), so a component-local
+    // flag bled onto whatever member you switched to mid-compact. Keying it by
+    // member name here disables only the compacting member's own buttons.
+    compacting: {} as Record<string, boolean>,
+    // Per-member in-flight flags for the other roster ops, same rationale as
+    // `compacting`: clear (a session wipe) and the lifecycle verbs
+    // (suspend/resume/freeze/unfreeze) each get a member-keyed flag so a card
+    // shows its own spinner during a bulk fan-out without bleeding onto siblings.
+    clearing: {} as Record<string, boolean>,
+    acting: {} as Record<string, boolean>,
   }),
   getters: {
     merged(state): MemberInfo[] {
@@ -33,6 +51,14 @@ export const useSpaceStore = defineStore('space', {
       const m = state.roster.find((x) => x.role === 'leader')
       return m?.name || state.roster[0]?.name || ''
     },
+    // True while the named member has a compaction request in flight. Reactive
+    // per member, so switching the inspector never inherits another member's
+    // busy state.
+    isCompacting: (state) => (name: string) => !!state.compacting[name],
+    isClearing: (state) => (name: string) => !!state.clearing[name],
+    // Any roster op in flight for this member — drives the card's spinner.
+    memberBusy: (state) => (name: string) =>
+      !!state.compacting[name] || !!state.clearing[name] || !!state.acting[name],
   },
   actions: {
     async refresh() {
@@ -68,8 +94,100 @@ export const useSpaceStore = defineStore('space', {
     async compactMember(name: string, kind: 'micro' | 'full') {
       const id = useConnectionStore().spaceId
       if (!id) return
-      await api.compactMember(id, name, kind)
+      this.compacting[name] = true
+      try {
+        await api.compactMember(id, name, kind)
+        await this.refresh()
+      } finally {
+        this.compacting[name] = false
+      }
+    },
+    // Fan `op` out across `names` concurrently (the per-member endpoints are
+    // independent), refresh the roster once at the end, and report which
+    // succeeded vs failed. `onSettled` fires the moment each member's request
+    // lands (not at the end), so a live UI can flip that member from a spinner
+    // to ✓ / ✗ as it goes. Callers pre-filter by eligibility (a busy member
+    // can't be cleared/compacted); the per-op try/catch still catches the
+    // member that goes busy between the filter and the request → a 409 lands in
+    // `failed` rather than rejecting the whole fan-out.
+    async bulkRun(
+      names: string[],
+      op: (name: string) => Promise<void>,
+      onSettled?: (name: string, error?: string) => void,
+    ): Promise<BulkResult> {
+      const ok: string[] = []
+      const failed: { name: string; error: string }[] = []
+      await Promise.all(
+        names.map(async (n) => {
+          try {
+            await op(n)
+            ok.push(n)
+            onSettled?.(n)
+          } catch (e) {
+            const error = errMsg(e)
+            failed.push({ name: n, error })
+            onSettled?.(n, error)
+          }
+        }),
+      )
       await this.refresh()
+      return { ok, failed }
+    },
+    bulkCompact(
+      names: string[],
+      kind: 'micro' | 'full',
+      onSettled?: (name: string, error?: string) => void,
+    ): Promise<BulkResult> {
+      const id = useConnectionStore().spaceId
+      if (!id) return Promise.resolve({ ok: [], failed: [] })
+      return this.bulkRun(
+        names,
+        async (n) => {
+          this.compacting[n] = true
+          try {
+            await api.compactMember(id, n, kind)
+          } finally {
+            this.compacting[n] = false
+          }
+        },
+        onSettled,
+      )
+    },
+    bulkClear(names: string[], onSettled?: (name: string, error?: string) => void): Promise<BulkResult> {
+      const id = useConnectionStore().spaceId
+      if (!id) return Promise.resolve({ ok: [], failed: [] })
+      return this.bulkRun(
+        names,
+        async (n) => {
+          this.clearing[n] = true
+          try {
+            await api.clearMember(id, n)
+          } finally {
+            this.clearing[n] = false
+          }
+        },
+        onSettled,
+      )
+    },
+    bulkCmd(
+      verb: 'suspend' | 'resume' | 'freeze' | 'unfreeze',
+      names: string[],
+      onSettled?: (name: string, error?: string) => void,
+    ): Promise<BulkResult> {
+      const id = useConnectionStore().spaceId
+      if (!id) return Promise.resolve({ ok: [], failed: [] })
+      return this.bulkRun(
+        names,
+        async (n) => {
+          this.acting[n] = true
+          try {
+            await api[verb](id, n)
+          } finally {
+            this.acting[n] = false
+          }
+        },
+        onSettled,
+      )
     },
     // Switch a member's permission stance (default | accept_edits | bypass).
     async setPermissionMode(name: string, mode: string) {
@@ -155,6 +273,9 @@ export const useSpaceStore = defineStore('space', {
     },
     reset() {
       this.roster = []
+      this.compacting = {}
+      this.clearing = {}
+      this.acting = {}
     },
   },
 })

@@ -115,6 +115,95 @@ describe('ledger + space getters', () => {
   })
 })
 
+// The bug this guards: the inspector is reused across members (no :key), so a
+// component-local busy flag bled onto whoever you switched to mid-compact. The
+// flag now lives in the store keyed by member.
+describe('space store · per-member compaction', () => {
+  beforeEach(() => useConnectionStore().setSpace('S1'))
+  afterEach(() => vi.restoreAllMocks())
+
+  it('marks only the compacting member busy, then clears it', async () => {
+    const sp = useSpaceStore()
+    vi.spyOn(api, 'roster').mockResolvedValue([])
+    let release!: () => void
+    vi.spyOn(api, 'compactMember').mockReturnValue(new Promise<null>((res) => (release = () => res(null))))
+
+    const done = sp.compactMember('qa', 'full')
+    expect(sp.isCompacting('qa')).toBe(true)
+    expect(sp.isCompacting('dev')).toBe(false) // a sibling stays clickable
+
+    release()
+    await done
+    expect(sp.isCompacting('qa')).toBe(false)
+  })
+
+  it('clears the busy flag even when the compact is refused (409)', async () => {
+    const sp = useSpaceStore()
+    vi.spyOn(api, 'compactMember').mockRejectedValue(new Error('409 busy'))
+    await expect(sp.compactMember('qa', 'full')).rejects.toThrow('busy')
+    expect(sp.isCompacting('qa')).toBe(false)
+  })
+})
+
+// Bulk ops fan the per-member endpoints out concurrently (the supervisor locks
+// per member), refresh once, and report ok vs failed so a member that goes busy
+// mid-flight (409) is surfaced rather than silently dropped.
+describe('space store · bulk ops', () => {
+  beforeEach(() => useConnectionStore().setSpace('S1'))
+  afterEach(() => vi.restoreAllMocks())
+
+  it('fans bulkCompact across members and reports all ok', async () => {
+    const sp = useSpaceStore()
+    vi.spyOn(api, 'roster').mockResolvedValue([])
+    const spy = vi.spyOn(api, 'compactMember').mockResolvedValue(null)
+    const r = await sp.bulkCompact(['a', 'b', 'c'], 'micro')
+    expect([...r.ok].sort()).toEqual(['a', 'b', 'c'])
+    expect(r.failed).toEqual([])
+    expect(spy).toHaveBeenCalledTimes(3)
+    expect(sp.memberBusy('a')).toBe(false) // flags cleared after
+  })
+
+  it('reports per-member failures from the fan-out (409 busy)', async () => {
+    const sp = useSpaceStore()
+    vi.spyOn(api, 'roster').mockResolvedValue([])
+    vi.spyOn(api, 'clearMember').mockImplementation((_id, name) =>
+      name === 'b' ? Promise.reject(new Error('409 busy')) : Promise.resolve(null),
+    )
+    const r = await sp.bulkClear(['a', 'b'])
+    expect(r.ok).toEqual(['a'])
+    expect(r.failed).toEqual([{ name: 'b', error: '409 busy' }])
+  })
+
+  it('marks each member busy during a bulk fan-out, then clears them', async () => {
+    const sp = useSpaceStore()
+    vi.spyOn(api, 'roster').mockResolvedValue([])
+    let release!: () => void
+    vi.spyOn(api, 'suspend').mockReturnValue(new Promise<null>((res) => (release = () => res(null))))
+    const done = sp.bulkCmd('suspend', ['a', 'b'])
+    expect(sp.memberBusy('a')).toBe(true)
+    expect(sp.memberBusy('b')).toBe(true)
+    release()
+    await done
+    expect(sp.memberBusy('a')).toBe(false)
+    expect(sp.memberBusy('b')).toBe(false)
+  })
+
+  it('fires onSettled per member as each lands (ok and error)', async () => {
+    const sp = useSpaceStore()
+    vi.spyOn(api, 'roster').mockResolvedValue([])
+    vi.spyOn(api, 'compactMember').mockImplementation((_id, name) =>
+      name === 'b' ? Promise.reject(new Error('409 busy')) : Promise.resolve(null),
+    )
+    const events: Record<string, string> = {}
+    const r = await sp.bulkCompact(['a', 'b'], 'full', (name, error) => {
+      events[name] = error ?? 'ok'
+    })
+    expect(events).toEqual({ a: 'ok', b: '409 busy' })
+    expect(r.ok).toEqual(['a'])
+    expect(r.failed).toEqual([{ name: 'b', error: '409 busy' }])
+  })
+})
+
 describe('proposals store', () => {
   it('counts only open proposals for the tab badge', () => {
     const p = useProposalsStore()

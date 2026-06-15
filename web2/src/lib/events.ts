@@ -446,6 +446,32 @@ export function attentionItems(
   return items
 }
 
+// orderRoster sorts members for the roster's "activity" view so a long roster
+// never buries an active worker at the bottom: leader first, then
+// needs-attention (kept in `attentionOrder`'s urgency order), then
+// busy → idle → suspended → frozen, alphabetical within a tier. `attentionOrder`
+// is the list of names needing attention, most-urgent first (attentionItems'
+// names). Pure + total — returns a new array, never mutates the input.
+export type RosterSortable = { name: string; role?: string; run?: string; membership?: string }
+export function orderRoster<T extends RosterSortable>(members: T[], attentionOrder: string[] = []): T[] {
+  const attIdx = new Map(attentionOrder.map((n, i) => [n, i]))
+  const rank = (m: T): number => {
+    if (m.role === 'leader') return 0
+    if (attIdx.has(m.name)) return 1
+    if (m.membership === 'frozen') return 5
+    if (m.run === 'busy') return 2
+    if (m.run === 'suspended') return 4
+    return 3
+  }
+  return [...(members || [])].sort((a, b) => {
+    const ra = rank(a)
+    const rb = rank(b)
+    if (ra !== rb) return ra - rb
+    if (ra === 1) return (attIdx.get(a.name) ?? 0) - (attIdx.get(b.name) ?? 0)
+    return a.name.localeCompare(b.name)
+  })
+}
+
 // isApproval / isQuestion classify the two interactive gate events.
 export function isApproval(ev?: WireEvent | null): boolean {
   return !!ev && ev.Kind === 'approval_needed'
