@@ -89,6 +89,7 @@ Wave → minor map (append a row whenever a new wave is planned):
 | v1.6 | Veronica fifth wave (RP-19..28; RP-24..28 debuted the minor at v1.6.0-beta.1) + EX-6 graduation via RP-26. Remaining EX-1..5 claim future minors as they ship |
 | v1.7 | Windows support (WIN-1..9) — native windows binaries, Git-Bash-backed bash tool; PRD: `docs/roadmap/PRD/windows-support.md` |
 | v1.7 | Persona members (RP-29) — registry main-tier personas join a swarm as leader/worker with full identity + team protocol |
+| v1.8 | Auto-memory consolidation (dream) — a gated, fenced background agent that merges/prunes/re-indexes the global memory store when idle; PRD: `docs/roadmap/PRD/auto-dream.md` |
 
 ### The four release commands
 

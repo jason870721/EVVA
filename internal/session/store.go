@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 // SessionsSubdir is the directory under APP_HOME that holds every
@@ -154,6 +155,61 @@ func List(appHome, workdirSlug string) ([]ListEntry, []string, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].MTime > out[j].MTime })
 	return out, warnings, nil
+}
+
+// CountTouchedSince counts persisted sessions across ALL workdir slugs whose
+// file mtime is after `since`, excluding excludeID (the current session, whose
+// mtime is always recent). evva's auto-memory is one global store, so the
+// dream activity-gate counts activity in every project — not just the current
+// workdir — as the signal that enough has accumulated to consolidate.
+//
+// Cheap and parse-free: one ReadDir per slug + a stat per file (mtime + name
+// are all that matter here; the snapshot JSON is never decoded). A missing
+// sessions root is 0, not an error — that's the normal "no prior sessions"
+// state. An unreadable individual slug dir is skipped, not fatal.
+func CountTouchedSince(appHome string, since time.Time, excludeID string) (int, error) {
+	if appHome == "" {
+		return 0, nil
+	}
+	root := filepath.Join(appHome, SessionsSubdir)
+	slugs, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("session: read sessions root %s: %w", root, err)
+	}
+	sinceNano := since.UnixNano()
+	var excludeFile string
+	if excludeID != "" {
+		excludeFile = excludeID + sessionFileSuffix
+	}
+	count := 0
+	for _, slug := range slugs {
+		if !slug.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, slug.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != sessionFileSuffix {
+				continue
+			}
+			if excludeFile != "" && f.Name() == excludeFile {
+				continue
+			}
+			info, err := f.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().UnixNano() > sinceNano {
+				count++
+			}
+		}
+	}
+	return count, nil
 }
 
 // Delete removes a single snapshot file. Missing files are not an error

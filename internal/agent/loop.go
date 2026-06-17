@@ -332,6 +332,12 @@ func (a *Agent) done(iter int, resp llm.Response) string {
 			}
 		})
 		a.logger.Debug("run.done.mainagent", "status", a.status)
+		// Main agent just went idle — the seam where a background memory
+		// consolidation ("dream") may fire. Cheap gate (a stat + a throttled
+		// scan); the dream itself, if it fires, runs in its own goroutine and
+		// does not block this return. No-op unless auto-dream is enabled and
+		// the gate opens. Mirrors ref's stopHooks trigger.
+		a.maybeFireDream()
 	}
 
 	return resp.Content

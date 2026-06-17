@@ -147,6 +147,24 @@ var SUPPORTED_SETTINGS = map[string]SettingConfig{
 		Get:         func(c *config.Config) any { return c.GetMemoryRecallModel() },
 		Set:         func(c *config.Config, v any) error { return c.SetMemoryRecallModel(toString(v)) },
 	},
+	"enable_auto_dream": {
+		Type:        TypeBool,
+		Description: "Enable background memory consolidation (\"dream\"): when idle and enough sessions have accumulated, a fenced background agent merges, prunes, and re-indexes your memory store (off by default — a real but rare token cost)",
+		Get:         func(c *config.Config) any { return c.GetEnableAutoDream() },
+		Set: func(c *config.Config, v any) error {
+			b, err := coerceBool(v)
+			if err != nil {
+				return err
+			}
+			return c.SetEnableAutoDream(b)
+		},
+	},
+	"auto_dream_model": {
+		Type:        TypeString,
+		Description: "Model id for the background dream agent; empty = the same cheap per-provider default the recall side-query uses",
+		Get:         func(c *config.Config) any { return c.GetAutoDreamModel() },
+		Set:         func(c *config.Config, v any) error { return c.SetAutoDreamModel(toString(v)) },
+	},
 	"fetch_max_bytes": {
 		Type:        TypeInt,
 		Description: "Cap on the text web_fetch returns from one URL",

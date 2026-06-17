@@ -148,6 +148,24 @@ type Config struct {
 	// the active model + the main agent's effort). See internal/agent recall wiring.
 	MemoryRecallModel string
 
+	// Auto-dream: background memory consolidation. When EnableAutoDream is true
+	// (and EnableAutoMemory is true), the main agent — on going idle — may fork a
+	// fenced background agent that consolidates the global memory store (merge
+	// duplicates, prune stale entries, rebuild the MEMORY.md index). Gated so it
+	// fires at most ~once per AutoDreamMinHours after AutoDreamMinSessions new
+	// sessions. Off by default — a dream is a real (if rare) token cost. See the
+	// internal/agent dream wiring + docs/roadmap/PRD/auto-dream.md.
+	EnableAutoDream bool
+	// AutoDreamMinHours is the minimum hours since the last consolidation before
+	// dream may fire again (default 24).
+	AutoDreamMinHours int
+	// AutoDreamMinSessions is the minimum number of sessions touched since the
+	// last consolidation before dream may fire (default 5).
+	AutoDreamMinSessions int
+	// AutoDreamModel optionally pins the dream agent's model id. Empty → the same
+	// cheap per-provider default the recall side-query uses (see MemoryRecallModel).
+	AutoDreamModel string
+
 	// Web tools
 	TavilyAPIKey  string // empty → web_search reports "not configured"
 	FetchMaxBytes int    // cap on extracted text returned by web_fetch
@@ -227,6 +245,10 @@ func (c *Config) Clone() *Config {
 		EnableAutoMemory:     c.EnableAutoMemory,
 		EnableMemoryRecall:   c.EnableMemoryRecall,
 		MemoryRecallModel:    c.MemoryRecallModel,
+		EnableAutoDream:      c.EnableAutoDream,
+		AutoDreamMinHours:    c.AutoDreamMinHours,
+		AutoDreamMinSessions: c.AutoDreamMinSessions,
+		AutoDreamModel:       c.AutoDreamModel,
 		TavilyAPIKey:         c.TavilyAPIKey,
 		FetchMaxBytes:        c.FetchMaxBytes,
 		LLMParamsTemperature: c.LLMParamsTemperature,
@@ -364,6 +386,55 @@ func (c *Config) GetMemoryRecallModel() string {
 func (c *Config) SetMemoryRecallModel(v string) error {
 	c.mu.Lock()
 	c.MemoryRecallModel = v
+	c.mu.Unlock()
+	return c.SaveFile()
+}
+
+// GetEnableAutoDream returns the background-consolidation master switch under
+// the read lock. Read at main-agent idle to decide whether to run the gate.
+func (c *Config) GetEnableAutoDream() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.EnableAutoDream
+}
+
+// SetEnableAutoDream toggles background memory consolidation and persists.
+func (c *Config) SetEnableAutoDream(v bool) error {
+	c.mu.Lock()
+	c.EnableAutoDream = v
+	c.mu.Unlock()
+	return c.SaveFile()
+}
+
+// GetAutoDreamMinHours returns the consolidation time-gate (hours) under the
+// read lock. Always ≥1 (load normalizes a missing/≤0 value to the default 24).
+func (c *Config) GetAutoDreamMinHours() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.AutoDreamMinHours
+}
+
+// GetAutoDreamMinSessions returns the consolidation activity-gate (session
+// count) under the read lock. Always ≥1 (load normalizes ≤0 to the default 5).
+func (c *Config) GetAutoDreamMinSessions() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.AutoDreamMinSessions
+}
+
+// GetAutoDreamModel returns the pinned dream-model id ("" → default resolution)
+// under the read lock.
+func (c *Config) GetAutoDreamModel() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.AutoDreamModel
+}
+
+// SetAutoDreamModel pins (or clears, with "") the dream agent's model and
+// persists.
+func (c *Config) SetAutoDreamModel(v string) error {
+	c.mu.Lock()
+	c.AutoDreamModel = v
 	c.mu.Unlock()
 	return c.SaveFile()
 }
@@ -697,6 +768,7 @@ func (c *Config) SaveFile() error {
 	}
 	enableAutoMem := c.EnableAutoMemory
 	enableMemRecall := c.EnableMemoryRecall
+	enableAutoDream := c.EnableAutoDream
 	var customCopy map[string]any
 	if len(c.CustomConfig) > 0 {
 		customCopy = make(map[string]any, len(c.CustomConfig))
@@ -719,6 +791,10 @@ func (c *Config) SaveFile() error {
 		EnableAutoMemory:     &enableAutoMem,
 		EnableMemoryRecall:   &enableMemRecall,
 		MemoryRecallModel:    c.MemoryRecallModel,
+		EnableAutoDream:      &enableAutoDream,
+		AutoDreamMinHours:    c.AutoDreamMinHours,
+		AutoDreamMinSessions: c.AutoDreamMinSessions,
+		AutoDreamModel:       c.AutoDreamModel,
 		Providers:            providers,
 		Custom:               customCopy,
 	}

@@ -215,6 +215,15 @@ type Agent struct {
 	// invalid request shape every provider rejects).
 	running atomic.Bool
 
+	// dreaming guards the background memory-consolidation pass: maybeFireDream
+	// CAS-es it true before launching the dream goroutine and runDream clears
+	// it on exit, so a process never runs two dreams at once (the on-disk lock
+	// guards across processes). lastDreamScanAt is the in-memory scan-throttle
+	// cursor the dream gate reads/advances; touched only by the loop goroutine
+	// that calls maybeFireDream, so it needs no lock. Both are main-agent-only.
+	dreaming        atomic.Bool
+	lastDreamScanAt time.Time
+
 	// runStartUsage is the session-usage snapshot taken when runLoop entered
 	// (RP-28): done() reports the run's own token cost as the delta from it
 	// on the RunEnd event. Written and read only by the goroutine holding

@@ -60,6 +60,18 @@ type FileConfig struct {
 	// key for. Unknown values are ignored (fall back to the default resolution).
 	MemoryRecallModel string `yaml:"memory_recall_model,omitempty"`
 
+	// EnableAutoDream gates background memory consolidation (the "dream" pass).
+	// Default false — opt-in, since each dream is a real (if rare) token cost.
+	// Pointer so a missing key preserves the default rather than zeroing.
+	EnableAutoDream *bool `yaml:"enable_auto_dream,omitempty"`
+	// AutoDreamMinHours / AutoDreamMinSessions are the dream gate thresholds
+	// (defaults 24 / 5); load normalizes ≤0 to the default. AutoDreamModel
+	// optionally pins the dream agent's model (empty → the recall-style
+	// per-provider default).
+	AutoDreamMinHours    int    `yaml:"auto_dream_min_hours,omitempty"`
+	AutoDreamMinSessions int    `yaml:"auto_dream_min_sessions,omitempty"`
+	AutoDreamModel       string `yaml:"auto_dream_model,omitempty"`
+
 	Providers map[string]FileProviderConfig `yaml:"providers"`
 
 	// Custom is the downstream-app extension slot. Values round-trip through

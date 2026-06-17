@@ -17,9 +17,11 @@ func TestSupportedSettingsKeys(t *testing.T) {
 	want := []string{
 		"anthropic.api_key", "anthropic.api_url",
 		"auto_compact_threshold",
+		"auto_dream_model",
 		"deepseek.api_key", "deepseek.api_url",
 		"default_effort", "default_profile",
 		"display_thinking",
+		"enable_auto_dream",
 		"enable_auto_memory",
 		"enable_memory_recall",
 		"fetch_max_bytes",

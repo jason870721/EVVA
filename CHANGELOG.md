@@ -14,6 +14,22 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ### Added
 
+- **Background memory consolidation ("dream").** When `enable_auto_dream` is on
+  (off by default) and the main agent goes idle, evva may fork a fenced
+  background agent that consolidates the global memory store — merging
+  near-duplicates, pruning stale or contradicted entries, converting relative
+  dates to absolute, and keeping `MEMORY.md` under its line budget. It is gated
+  to fire at most once per `auto_dream_min_hours` (default 24) after
+  `auto_dream_min_sessions` (default 5) new sessions across all workdirs, with an
+  on-disk lock preventing concurrent runs and rolling back on failure so the
+  gate re-opens. The dream agent is **fenced**: no shell / web / subagent tools,
+  recall disabled, and any write outside the memory dir is auto-denied (it reads
+  anywhere, writes only memory). Ported from `ref/src/services/autoDream/` and
+  adapted to evva's single global memory store. New `pkg/config` knobs —
+  `enable_auto_dream`, `auto_dream_min_hours`, `auto_dream_min_sessions`,
+  `auto_dream_model` (the first and last also reachable via `/config`). PRD:
+  `docs/roadmap/PRD/auto-dream.md`.
+
 - **`remember` bundled skill.** A new first-party skill (`/remember`) that
   reviews the session's auto-memory landscape and returns a grouped report of
   *proposed* changes for the user to approve — promotions of durable,

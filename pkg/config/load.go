@@ -211,6 +211,22 @@ func Load(opts LoadOptions) (*Config, error) {
 		enableMemRecall = *fileCfg.EnableMemoryRecall
 	}
 
+	// Auto-dream is opt-in (default off). The two thresholds normalize a
+	// missing or non-positive value to their defaults so the gate always has a
+	// sane floor.
+	enableAutoDream := false
+	if fileCfg.EnableAutoDream != nil {
+		enableAutoDream = *fileCfg.EnableAutoDream
+	}
+	autoDreamMinHours := 24
+	if fileCfg.AutoDreamMinHours > 0 {
+		autoDreamMinHours = fileCfg.AutoDreamMinHours
+	}
+	autoDreamMinSessions := 5
+	if fileCfg.AutoDreamMinSessions > 0 {
+		autoDreamMinSessions = fileCfg.AutoDreamMinSessions
+	}
+
 	cfg := &Config{
 		AppName:    appName,
 		AppVersion: appVersion,
@@ -236,6 +252,10 @@ func Load(opts LoadOptions) (*Config, error) {
 		EnableAutoMemory:     enableAutoMem,
 		EnableMemoryRecall:   enableMemRecall,
 		MemoryRecallModel:    fileCfg.MemoryRecallModel,
+		EnableAutoDream:      enableAutoDream,
+		AutoDreamMinHours:    autoDreamMinHours,
+		AutoDreamMinSessions: autoDreamMinSessions,
+		AutoDreamModel:       fileCfg.AutoDreamModel,
 		TavilyAPIKey:         fileCfg.TavilyAPIKey,
 		FetchMaxBytes:        fileCfg.FetchMaxBytes,
 		DefaultProvider:      defProvider,

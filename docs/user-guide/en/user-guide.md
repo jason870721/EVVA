@@ -825,6 +825,8 @@ tavily_api_key: ""
 enable_auto_memory: true     # memory guidance + MEMORY.md index + write carve-out + recall
 enable_memory_recall: true   # per-turn relevance side-query (cost lever; false keeps the index only)
 memory_recall_model: ""      # empty = cheap model in the active provider (anthropic→sonnet, deepseek→flash, openai→gpt-5.4-mini, glm→glm-4.6 @ medium; ollama→active model+effort)
+enable_auto_dream: false     # background "dream": consolidate/prune/re-index memory when idle (off by default; a real but rare token cost)
+auto_dream_model: ""         # empty = the same cheap per-provider default as recall (auto_dream_min_hours: 24, auto_dream_min_sessions: 5 tune the gate)
 
 # Per-provider credentials. Empty api_url falls back to the constant's default.
 # glm (Zhipu/z.ai) speaks the Anthropic-compatible endpoint; reading an image
@@ -858,8 +860,17 @@ auto-approved, so it won't prompt you for each note.
   model and effort — and you can pin a specific one with `memory_recall_model`.
 - **Freshness:** a recalled memory older than a day is prefixed with its age and
   a caveat to verify against current code before trusting it.
+- **Background consolidation ("dream"):** with `enable_auto_dream: true` (off by
+  default), when you go idle and enough new sessions have accumulated (defaults:
+  at most once per 24h after 5 sessions — tune with `auto_dream_min_hours` /
+  `auto_dream_min_sessions`), evva forks a fenced background agent that tidies the
+  store: merging near-duplicates, pruning stale or contradicted entries, and
+  keeping `MEMORY.md` small. It is confined to the memory directory (no shell,
+  writes anywhere else are refused) and runs one at a time. Think of it as the
+  automatic complement to the manual `/remember` review.
 - **Turning it off:** `enable_auto_memory: false` (or `EVVA_AUTO_MEMORY=0`)
-  disables the whole subsystem — no directory, no recall, no prompt section.
+  disables the whole subsystem — no directory, no recall, no dream, no prompt
+  section.
 
 > The previous two-file model (`USER_PROFILE.md` + per-project
 > `projects/<key>/MEMORY.md`) and the `update_user_profile` /
