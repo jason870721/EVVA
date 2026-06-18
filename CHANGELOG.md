@@ -12,6 +12,8 @@ was consolidated into v1.3.0-beta.1 — the first beta cut after v1.1.0.
 
 ## [Unreleased]
 
+## [v1.8.0-beta.3] — 2026-06-18
+
 ### Added
 
 - **Cron scheduling tools (`cron_create` / `cron_list` / `cron_delete`).** The
@@ -1720,7 +1722,8 @@ Initial published tag — Phase 13 SDK split + Phase 14 session storage +
 Phase 15 friday proof of concept. See `EVVA.md` for the per-phase
 deliverables.
 
-[Unreleased]: https://github.com/johnny1110/evva/compare/v1.8.0-beta.2...HEAD
+[Unreleased]: https://github.com/johnny1110/evva/compare/v1.8.0-beta.3...HEAD
+[v1.8.0-beta.3]: https://github.com/johnny1110/evva/compare/v1.8.0-beta.2...v1.8.0-beta.3
 [v1.8.0-beta.2]: https://github.com/johnny1110/evva/compare/v1.8.0-beta.1...v1.8.0-beta.2
 [v1.8.0-beta.1]: https://github.com/johnny1110/evva/compare/v1.7.5-beta.3...v1.8.0-beta.1
 [v1.7.5-beta.3]: https://github.com/johnny1110/evva/compare/v1.7.5-beta.2...v1.7.5-beta.3
